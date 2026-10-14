@@ -1,0 +1,239 @@
+# syntax=docker/dockerfile:1
+# 一个最终镜像 / 一个容器：MySQL 8.4、Redis、Nginx、Daphne、Celery、调度器。
+# Node 阶段只编译前端，不输出独立前端镜像。
+FROM node:22-alpine AS frontend-builder
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM python:3.12-slim-bookworm
+ARG TARGETARCH
+ARG MYSQL_VERSION=8.4.9
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
+    DJANGO_SETTINGS_MODULE=backend.settings \
+    PATH=/opt/mysql/bin:$PATH
+WORKDIR /app
+
+# 禁止 apt 在构建时启动守护进程，运行时由 Supervisor 统一管理。
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod +x /usr/sbin/policy-rc.d \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       build-essential libffi-dev libssl-dev libgl1 libglib2.0-0 libzbar0 \
+       adb default-jre-headless ca-certificates curl xz-utils libaio1 libnuma1 \
+       libncurses6 libtirpc3 redis-server nginx supervisor \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/nginx/sites-enabled/default \
+    && groupadd --system mysql \
+    && useradd --system --gid mysql --home-dir /var/lib/mysql mysql
+
+# 直接安装 MySQL 官方二进制，不使用 MySQL/Redis 容器镜像。
+RUN case "$TARGETARCH" in \
+        amd64) mysql_arch=x86_64 ;; \
+        arm64) mysql_arch=aarch64 ;; \
+        *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && curl --fail --location --retry 3 \
+       "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-${MYSQL_VERSION}-linux-glibc2.28-${mysql_arch}.tar.xz" \
+       -o /tmp/mysql.tar.xz \
+    && mkdir -p /opt/mysql \
+    && tar -xJf /tmp/mysql.tar.xz --strip-components=1 -C /opt/mysql \
+    && rm /tmp/mysql.tar.xz \
+    && /opt/mysql/bin/mysqld --version
+
+COPY requirements.txt ./
+# Airtest 元数据包含 Windows 依赖，Linux 单独安装所需依赖；CPU 版 OCR。
+RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 torchvision==0.21.0 \
+    && sed '/^airtest==/d' requirements.txt > /tmp/requirements-linux.txt \
+    && pip install -r /tmp/requirements-linux.txt 'opencv-python-headless<4.12' \
+       'Jinja2>=2.8' 'mss==6.1.0' 'facebook-wda==1.5.0' filelock ffmpeg-python tidevice \
+    && pip install --no-deps airtest==1.4.3 \
+    && python -m playwright install --with-deps chromium
+
+COPY . .
+COPY --from=frontend-builder /build/frontend/dist /usr/share/nginx/html
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+RUN mkdir -p /app/logs /app/media /app/static_files /app/perf_workspace /var/lib/mysql /var/lib/redis /run/mysqld \
+    && chown -R mysql:mysql /var/lib/mysql /run/mysqld \
+    && sed -i 's/\r$//' /app/allure/bin/allure \
+    && chmod +x /app/allure/bin/allure
+
+# 以下辅助文件仅在镜像内部生成，仓库只维护允许的六个部署文件。
+RUN <<'BUILD'
+cat > /usr/local/bin/testhub-start <<'SH'
+#!/bin/sh
+set -eu
+: "${DB_PASSWORD:?DB_PASSWORD must be configured}"
+: "${SECRET_KEY:?SECRET_KEY must be configured}"
+mkdir -p /run/mysqld /var/lib/mysql /var/lib/redis
+chown -R mysql:mysql /var/lib/mysql /run/mysqld
+if [ ! -d /var/lib/mysql/mysql ]; then
+    mysqld --no-defaults --initialize-insecure --user=mysql --datadir=/var/lib/mysql
+fi
+exec /usr/bin/supervisord -n -c /etc/supervisor/testhub.conf
+SH
+chmod +x /usr/local/bin/testhub-start
+
+cat > /usr/local/bin/testhub-bootstrap.py <<'PYTHON'
+import os
+import re
+import subprocess
+import sys
+import time
+import pymysql
+
+name = os.environ.get('DB_NAME', 'testhub')
+user = os.environ.get('DB_USER', 'testhub')
+password = os.environ['DB_PASSWORD']
+root_password = os.environ.get('MYSQL_ROOT_PASSWORD') or password
+if not re.fullmatch(r'[A-Za-z0-9_]+', name):
+    raise ValueError('DB_NAME must contain only letters, digits and underscores')
+if not re.fullmatch(r'[A-Za-z0-9_]+', user) or user == 'root':
+    raise ValueError('DB_USER must be a regular database user, not root')
+
+# 空卷首次使用空 root 密码；重启使用配置中的 root 密码。不要覆盖已有卷的未知密码。
+connection = None
+for attempt in range(90):
+    for candidate in (root_password, ''):
+        try:
+            connection = pymysql.connect(
+                unix_socket='/run/mysqld/mysqld.sock', user='root', password=candidate,
+                autocommit=True, connect_timeout=2,
+            )
+            break
+        except pymysql.MySQLError:
+            pass
+    if connection is not None:
+        break
+    time.sleep(1)
+if connection is None:
+    raise RuntimeError('MySQL startup/authentication failed; check logs and existing volume credentials')
+with connection.cursor() as cursor:
+    cursor.execute(f'CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')
+    account = f"{connection.escape(user)}@'localhost'"
+    cursor.execute(f'CREATE USER IF NOT EXISTS {account} IDENTIFIED BY {connection.escape(password)}')
+    # 与 MySQL 初始化行为一致，已有应用用户密码不在每次启动时覆盖。
+    cursor.execute(f'GRANT ALL PRIVILEGES ON `{name}`.* TO {account}')
+    cursor.execute(f"ALTER USER 'root'@'localhost' IDENTIFIED BY {connection.escape(root_password)}")
+connection.close()
+
+subprocess.run([sys.executable, 'manage.py', 'migrate', '--noinput'], check=True)
+subprocess.run([sys.executable, 'manage.py', 'collectstatic', '--noinput'], check=True)
+subprocess.run([
+    '/usr/bin/supervisorctl', '-c', '/etc/supervisor/testhub.conf',
+    'start', 'daphne', 'worker', 'scheduler', 'nginx',
+], check=True)
+PYTHON
+
+cat > /etc/supervisor/testhub.conf <<'CONF'
+[unix_http_server]
+file=/run/testhub-supervisor.sock
+chmod=0700
+
+[supervisord]
+user=root
+nodaemon=true
+logfile=/dev/null
+logfile_maxbytes=0
+pidfile=/run/testhub-supervisor.pid
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix:///run/testhub-supervisor.sock
+
+[program:mysql]
+command=/opt/mysql/bin/mysqld --no-defaults --user=mysql --datadir=/var/lib/mysql --socket=/run/mysqld/mysqld.sock --pid-file=/run/mysqld/mysqld.pid --bind-address=127.0.0.1 --port=3306 --mysqlx=0 --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+priority=10
+autorestart=true
+stopwaitsecs=60
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:redis]
+command=/usr/bin/redis-server --bind 127.0.0.1 --protected-mode yes --dir /var/lib/redis --appendonly yes --daemonize no
+priority=10
+autorestart=true
+stopwaitsecs=30
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:bootstrap]
+command=/usr/local/bin/python /usr/local/bin/testhub-bootstrap.py
+directory=/app
+priority=20
+startsecs=0
+startretries=0
+autorestart=false
+stopasgroup=true
+killasgroup=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:daphne]
+command=/usr/local/bin/daphne -b 127.0.0.1 -p 8000 backend.asgi:application
+directory=/app
+priority=30
+autostart=false
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:worker]
+command=/usr/local/bin/celery -A backend worker --loglevel=info --concurrency=2
+directory=/app
+priority=30
+autostart=false
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stopwaitsecs=60
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:scheduler]
+command=/usr/local/bin/python manage.py run_all_scheduled_tasks --interval=60
+directory=/app
+priority=30
+autostart=false
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:nginx]
+command=/usr/sbin/nginx -g "daemon off;"
+priority=40
+autostart=false
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+CONF
+BUILD
+
+EXPOSE 80
+CMD ["/usr/local/bin/testhub-start"]

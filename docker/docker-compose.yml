@@ -1,0 +1,76 @@
+# 在项目根目录运行（Windows PowerShell）：docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+# 只构建一个镜像；MySQL 8.4、Redis、Nginx、Daphne、Celery 和调度器在同一容器内运行。
+# 复用项目已有 .env，不创建新的环境文件。
+# 管理员：docker compose --env-file .env -f docker/docker-compose.yml exec testhub python manage.py createsuperuser
+# 日志：docker compose --env-file .env -f docker/docker-compose.yml logs -f testhub
+# 进程：docker compose --env-file .env -f docker/docker-compose.yml exec testhub supervisorctl -c /etc/supervisor/testhub.conf status
+# FRONTEND_PORT 改为 8080 时，将下面来源设置为 http://localhost:8080,http://127.0.0.1:8080。
+# 升级前备份数据。已有数据库卷的密码需与 .env 一致，不会自动覆盖。
+# down 保留卷；down -v 会删除数据库、上传文件等数据。
+name: testhub
+
+services:
+  testhub:
+    image: ${TESTHUB_IMAGE:-testhub:local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.multiplatform
+    env_file:
+      - ../.env
+    environment:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-testhub}
+      DB_USER: ${DOCKER_DB_USER:-testhub}
+      DB_PASSWORD: ${DB_PASSWORD:?现有 .env 中需要配置 DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${DB_PASSWORD}}
+      SECRET_KEY: ${SECRET_KEY:?现有 .env 中需要配置 SECRET_KEY}
+      REDIS_URL: redis://127.0.0.1:6379/0
+      DEBUG: "False"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1}
+      APP_USE_HTTPS: "False"
+      TRUST_PROXY_SSL_HEADER: "False"
+      CSRF_COOKIE_SECURE: "False"
+      SESSION_COOKIE_SECURE: "False"
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - redis_data:/var/lib/redis
+      - media:/app/media
+      - static:/app/static_files
+      - logs:/app/logs
+      - perf_workspace:/app/perf_workspace
+      - ocr_cache:/root/.EasyOCR
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import os, subprocess, urllib.request
+          import pymysql, redis
+          urllib.request.urlopen('http://127.0.0.1/admin/login/', timeout=5).close()
+          conn = pymysql.connect(host='127.0.0.1', user=os.environ['DB_USER'], password=os.environ['DB_PASSWORD'], database=os.environ['DB_NAME'], connect_timeout=5)
+          conn.close()
+          assert redis.Redis.from_url(os.environ['REDIS_URL'], socket_timeout=5).ping()
+          result = subprocess.check_output(['/usr/bin/supervisorctl', '-c', '/etc/supervisor/testhub.conf', 'status', 'daphne', 'worker', 'scheduler', 'nginx', 'mysql', 'redis'], text=True)
+          assert all('RUNNING' in line for line in result.splitlines())
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+volumes:
+  mysql_data:
+  redis_data:
+  media:
+  static:
+  logs:
+  perf_workspace:
+  ocr_cache:
