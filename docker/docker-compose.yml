@@ -21,7 +21,8 @@ services:
       DB_HOST: 127.0.0.1
       DB_PORT: "3306"
       DB_NAME: ${DB_NAME:-testhub}
-      DB_USER: ${DOCKER_DB_USER:-${DB_USER:-testhub}}
+      # 本地开发的 DB_USER 可能是 root；容器初始化要求独立的应用账号。
+      DB_USER: ${DOCKER_DB_USER:-testhub}
       DB_PASSWORD: ${DB_PASSWORD:?现有 .env 中需要配置 DB_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-${DB_PASSWORD}}
       SECRET_KEY: ${SECRET_KEY:?现有 .env 中需要配置 SECRET_KEY}
