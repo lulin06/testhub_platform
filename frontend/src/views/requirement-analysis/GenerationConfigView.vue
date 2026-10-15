@@ -55,6 +55,12 @@
                     {{ config.enable_auto_review ? $t('generationConfig.enabled') : $t('generationConfig.disabled') }}
                   </span>
                 </div>
+                <div class="detail-item">
+                  <label>{{ $t('generationConfig.autoRevise') }}</label>
+                  <span :class="{ enabled: config.enable_auto_revise, disabled: !config.enable_auto_revise }">
+                    {{ config.enable_auto_revise ? $t('generationConfig.enabled') : $t('generationConfig.disabled') }}
+                  </span>
+                </div>
               </div>
 
               <div class="detail-section">
@@ -149,6 +155,16 @@
                   {{ $t('generationConfig.autoReviewHint') }}
                 </div>
               </div>
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input v-model="configForm.enable_auto_revise" type="checkbox">
+                  <span class="checkmark"></span>
+                  {{ $t('generationConfig.enableAutoRevise') }}
+                </label>
+                <div class="checkbox-hint">
+                  {{ $t('generationConfig.autoReviseHint') }}
+                </div>
+              </div>
             </div>
 
             <div class="form-section">
@@ -206,6 +222,7 @@ export default {
         name: '',
         default_output_mode: 'stream',
         enable_auto_review: true,
+        enable_auto_revise: true,
         review_timeout: 1500,
         is_active: true
       }
@@ -258,6 +275,7 @@ export default {
         name: this.t('generationConfig.defaultConfigName'),
         default_output_mode: 'stream',
         enable_auto_review: true,
+        enable_auto_revise: true,
         review_timeout: 1500,
         is_active: true
       }
@@ -270,6 +288,7 @@ export default {
         name: config.name,
         default_output_mode: config.default_output_mode,
         enable_auto_review: config.enable_auto_review,
+        enable_auto_revise: config.enable_auto_revise,
         review_timeout: config.review_timeout,
         is_active: config.is_active
       }

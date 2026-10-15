@@ -475,6 +475,9 @@ export default {
     automationSettings: '🤖 Automation Process Config',
     enableAutoReview: 'Enable AI Review & Improve',
     autoReviewHint: 'Automatically perform AI review after generation and improve test cases based on review feedback',
+    autoRevise: 'Auto Revise Cases',
+    enableAutoRevise: 'Enable Auto Revise',
+    autoReviseHint: 'Automatically rewrite all test cases after review; disable to skip the most time-consuming rewrite stage (review feedback is still produced, significantly speeding up the whole flow)',
 
     // Timeout
     timeoutSettingsLabel: '⏱️ Timeout Settings',

@@ -475,6 +475,9 @@ export default {
     automationSettings: '🤖 自动化流程配置',
     enableAutoReview: '启用AI评审和改进',
     autoReviewHint: '生成完成后自动进行AI评审，并根据评审意见改进测试用例',
+    autoRevise: '自动改进用例',
+    enableAutoRevise: '启用自动改进用例',
+    autoReviseHint: '评审完成后自动重写全部测试用例；关闭可跳过耗时最长的重写阶段（仍会输出评审意见，显著加快整体速度）',
 
     // Timeout
     timeoutSettingsLabel: '⏱️ 超时设置',

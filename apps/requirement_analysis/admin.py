@@ -79,7 +79,7 @@ class GenerationConfigAdmin(admin.ModelAdmin):
             'fields': ('default_output_mode',)
         }),
         ('自动化配置', {
-            'fields': ('enable_auto_review',)
+            'fields': ('enable_auto_review', 'enable_auto_revise')
         }),
         ('超时配置', {
             'fields': ('review_timeout',)

@@ -258,7 +258,7 @@
               <span class="stream-title">{{ $t('requirementAnalysis.realtimeGeneratedContent') }}</span>
               <span class="stream-status">{{ $t('requirementAnalysis.characters', { count: streamedContent.length }) }}</span>
             </div>
-            <div class="stream-content" v-html="formatMarkdown(streamedContent)"></div>
+            <div class="stream-content" v-html="streamedContentHtml"></div>
           </div>
 
           <!-- 评审内容显示区域 -->
@@ -267,7 +267,7 @@
               <span class="stream-title">{{ $t('requirementAnalysis.aiReviewComments') }}</span>
               <span class="stream-status">{{ $t('requirementAnalysis.characters', { count: streamedReviewContent.length }) }}</span>
             </div>
-            <div class="stream-content" v-html="formatMarkdown(streamedReviewContent)"></div>
+            <div class="stream-content" v-html="streamedReviewContentHtml"></div>
           </div>
 
           <!-- 最终版用例显示区域 -->
@@ -279,7 +279,7 @@
               </span>
               <span class="stream-status">{{ $t('requirementAnalysis.characters', { count: finalTestCases.length }) }}</span>
             </div>
-            <div class="stream-content final-testcases" v-html="formatMarkdown(finalTestCases)"></div>
+            <div class="stream-content final-testcases" v-html="finalTestCasesHtml"></div>
           </div>
 
           <div class="progress-steps">
@@ -375,6 +375,12 @@ export default {
       streamedContent: '',  // 流式接收的内容
       streamedReviewContent: '',  // 流式接收的评审内容
       finalTestCases: '',  // 最终版用例
+      // 节流渲染快照：按固定间隔把累积内容转成 HTML，避免每个 chunk 都全量重渲染
+      streamedContentHtml: '',
+      streamedReviewContentHtml: '',
+      finalTestCasesHtml: '',
+      renderTimer: null,  // 节流渲染定时器
+      renderedLengths: { streamed: -1, review: -1, final: -1 },  // 上次渲染时的内容长度
       hasShownCompletionMessage: false,  // 是否已经显示过完成消息
       showReviewStep: true,  // 是否显示评审步骤（根据生成配置决定）
 
@@ -460,6 +466,11 @@ export default {
   beforeUnmount() {
     if (this.pollInterval) {
       clearInterval(this.pollInterval)
+    }
+    // 停止节流渲染定时器
+    if (this.renderTimer) {
+      clearInterval(this.renderTimer)
+      this.renderTimer = null
     }
     // 停止token自动刷新定时器
     const userStore = useUserStore()
@@ -724,11 +735,7 @@ export default {
       try {
         const userStore = useUserStore()
         if (userStore.isTokenExpiringSoon && userStore.refreshToken) {
-          console.log('Refreshing token before generation...')
           await userStore.refreshAccessToken()
-          console.log('Token refreshed successfully, safe to start generation')
-        } else if (userStore.accessToken) {
-          console.log('Token status is good, no refresh needed')
         }
       } catch (error) {
         console.error('Token refresh failed:', error)
@@ -767,6 +774,10 @@ export default {
 
         ElMessage.success(this.$t('requirementAnalysis.generateSuccess'))
 
+        // 重置节流渲染快照并启动渲染定时器（SSE 与轮询两种模式共用）
+        this.resetRenderedContent()
+        this.startRenderTimer()
+
         // 根据输出模式选择不同的进度获取方式
         if (outputMode === 'stream') {
           this.startStreamingProgress()
@@ -792,22 +803,12 @@ export default {
       const currentOrigin = window.location.origin
       const apiUrl = `${currentOrigin}/api/requirement-analysis/testcase-generation/${this.currentTaskId}/stream_progress/`
 
-      console.log('SSE连接URL:', apiUrl)
-
       // 创建EventSource（不支持自定义headers，使用withCredentials发送cookie）
       this.eventSource = new EventSource(apiUrl, { withCredentials: true })
 
-      // 监听连接打开事件
-      this.eventSource.onopen = (event) => {
-        console.log('✅ SSE连接已打开', event)
-      }
-
       this.eventSource.onmessage = (event) => {
-        console.log('📨 收到SSE消息:', event.data)
-
         try {
           const data = JSON.parse(event.data)
-          console.log('📦 解析后的数据:', data)
 
           if (data.type === 'progress') {
             // Update progress status
@@ -823,25 +824,21 @@ export default {
             }
           } else if (data.type === 'content') {
             // Real-time streaming content (case generation)
-            console.log('✍️ Received streaming content:', data.content.length, 'characters')
             this.streamedContent += data.content
             this.currentStep = 2
             this.progressText = this.$t('requirementAnalysis.statusGenerating')
           } else if (data.type === 'review_content') {
             // Real-time review content
-            console.log('📝 Received review content:', data.content.length, 'characters', 'Total length:', this.streamedReviewContent.length + data.content.length)
             this.streamedReviewContent += data.content
             this.currentStep = 3
             this.progressText = this.$t('requirementAnalysis.statusReviewing')
           } else if (data.type === 'final_content') {
             // Real-time final test cases content
-            console.log('🎯 Received final cases content:', data.content.length, 'characters', 'Total length:', this.finalTestCases.length + data.content.length)
             this.finalTestCases += data.content
             this.currentStep = 3
             this.progressText = '🎯 ' + this.$t('requirementAnalysis.statusRevising')
           } else if (data.type === 'status') {
             // Final status
-            console.log('📊 Received status update:', data.status)
             if (data.status === 'completed') {
               this.progressText = this.$t('requirementAnalysis.statusCompleted')
               // Fetch final result
@@ -852,9 +849,7 @@ export default {
             }
           } else if (data.type === 'done') {
             // 流式结束，立即关闭EventSource，获取最终结果
-            console.log('✅ 流式传输完成')
             if (this.eventSource) {
-              console.log('🔒 关闭SSE连接')
               this.eventSource.close()
               this.eventSource = null
             }
@@ -865,23 +860,14 @@ export default {
         }
       }
 
-      this.eventSource.onerror = (error) => {
-        console.log('⚠️ SSE连接事件:', error)
-
+      this.eventSource.onerror = () => {
         // 如果EventSource已经被关闭（在onmessage中关闭的），不做任何处理
         if (!this.eventSource) {
-          console.log('ℹ️ EventSource已关闭，忽略错误事件')
           return
         }
 
-        console.log('EventSource状态:', {
-          readyState: this.eventSource.readyState,
-          url: this.eventSource.url
-        })
-
         // 如果任务已经完成或不在生成中，不要降级
         if (this.showResults || !this.isGenerating) {
-          console.log('ℹ️ 任务已完成或不在生成中，不降级到轮询')
           // 清理EventSource
           if (this.eventSource) {
             this.eventSource.close()
@@ -900,7 +886,6 @@ export default {
           this.startPolling()
         } else if (this.eventSource.readyState === 0) {
           // EventSource正在重连，等待一段时间后检查
-          console.log('🔄 SSE正在重连...')
           setTimeout(() => {
             // 如果5秒后还是断开状态，降级到轮询
             if (this.eventSource && this.eventSource.readyState === 0) {
@@ -930,7 +915,6 @@ export default {
 
         // 设置最终版用例（如果还没有通过流式接收完整）
         if (task.final_test_cases) {
-          console.log('📝 Getting final cases from task object')
           // 无论this.finalTestCases是否已有值，都用最新的final_test_cases覆盖
           // 这样确保完整输出模式下也能正确显示最终版用例
           this.finalTestCases = task.final_test_cases
@@ -938,15 +922,16 @@ export default {
 
         // 如果评审内容为空，从task对象中获取
         if (!this.streamedReviewContent && task.review_feedback) {
-          console.log('📝 Getting review content from task object')
           this.streamedReviewContent = task.review_feedback
         }
 
         // 如果生成内容为空，从task对象中获取
         if (!this.streamedContent && task.generated_test_cases) {
-          console.log('✍️ Getting generated content from task object')
           this.streamedContent = task.generated_test_cases
         }
+
+        // 停止节流渲染并做一次最终渲染，确保完成后展示完整内容
+        this.stopRenderTimer()
 
         if (this.eventSource) {
           this.eventSource.close()
@@ -967,6 +952,7 @@ export default {
 
     handleGenerationError() {
       this.isGenerating = false
+      this.stopRenderTimer()
       if (this.eventSource) {
         this.eventSource.close()
         this.eventSource = null
@@ -978,13 +964,13 @@ export default {
     },
 
     startPolling() {
+      // 兜底：若渲染定时器未启动（如从 SSE 降级到轮询），确保启动
+      this.startRenderTimer()
       this.pollInterval = setInterval(async () => {
         try {
           // 修复URL：去掉多余的/api/前缀（axios baseURL已经包含/api）
           const response = await api.get(`/requirement-analysis/testcase-generation/${this.currentTaskId}/progress/`)
           const task = response.data
-
-          console.log(`${this.$t('requirementAnalysis.taskStatus')}: ${task.status}, ${this.$t('requirementAnalysis.progress')}: ${task.progress}%`)
 
           // 更新进度显示
           if (task.status === 'generating') {
@@ -1004,17 +990,17 @@ export default {
 
             // 设置显示内容（完整输出模式下需要）
             if (task.generated_test_cases) {
-              console.log('✍️ Polling mode - Setting generated content')
               this.streamedContent = task.generated_test_cases
             }
             if (task.review_feedback) {
-              console.log('📝 Polling mode - Setting review content')
               this.streamedReviewContent = task.review_feedback
             }
             if (task.final_test_cases) {
-              console.log('🎯 Polling mode - Setting final test cases')
               this.finalTestCases = task.final_test_cases
             }
+
+            // 停止节流渲染并做一次最终渲染
+            this.stopRenderTimer()
 
             clearInterval(this.pollInterval)
             this.pollInterval = null
@@ -1185,6 +1171,7 @@ export default {
       this.streamedContent = '';
       this.streamedReviewContent = '';
       this.finalTestCases = '';
+      this.stopRenderTimer();
 
       if (this.pollInterval) {
         clearInterval(this.pollInterval);
@@ -1205,6 +1192,46 @@ export default {
       const hours = String(date.getHours()).padStart(2, '0');
       const minutes = String(date.getMinutes()).padStart(2, '0');
       return `${year}-${month}-${day} ${hours}:${minutes}`;
+    },
+
+    // 重置节流渲染快照（开始新任务或清空内容时调用）
+    resetRenderedContent() {
+      this.streamedContentHtml = ''
+      this.streamedReviewContentHtml = ''
+      this.finalTestCasesHtml = ''
+      this.renderedLengths = { streamed: -1, review: -1, final: -1 }
+    },
+
+    // 节流刷新 markdown 渲染：仅在内容长度变化时才重算，避免每个 chunk 都做全量正则
+    refreshRenderedContent() {
+      const lengths = this.renderedLengths
+      if (this.streamedContent.length !== lengths.streamed) {
+        lengths.streamed = this.streamedContent.length
+        this.streamedContentHtml = this.formatMarkdown(this.streamedContent)
+      }
+      if (this.streamedReviewContent.length !== lengths.review) {
+        lengths.review = this.streamedReviewContent.length
+        this.streamedReviewContentHtml = this.formatMarkdown(this.streamedReviewContent)
+      }
+      if (this.finalTestCases.length !== lengths.final) {
+        lengths.final = this.finalTestCases.length
+        this.finalTestCasesHtml = this.formatMarkdown(this.finalTestCases)
+      }
+    },
+
+    // 启动节流渲染定时器（250ms 批量刷新一次，替代每个 chunk 即时渲染）
+    startRenderTimer() {
+      if (this.renderTimer) return
+      this.renderTimer = setInterval(() => this.refreshRenderedContent(), 250)
+    },
+
+    // 停止节流渲染定时器，并做一次最终渲染，确保展示完整内容
+    stopRenderTimer() {
+      if (this.renderTimer) {
+        clearInterval(this.renderTimer)
+        this.renderTimer = null
+      }
+      this.refreshRenderedContent()
     },
 
     // 格式化Markdown为HTML（简化版）

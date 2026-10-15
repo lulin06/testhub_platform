@@ -300,7 +300,7 @@ class GenerationConfigSerializer(serializers.ModelSerializer):
         model = GenerationConfig
         fields = [
             'id', 'name', 'default_output_mode', 'default_output_mode_display',
-            'enable_auto_review', 'review_timeout',
+            'enable_auto_review', 'enable_auto_revise', 'review_timeout',
             'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']

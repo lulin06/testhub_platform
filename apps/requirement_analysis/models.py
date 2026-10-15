@@ -302,6 +302,11 @@ class GenerationConfig(models.Model):
         verbose_name='启用AI评审和改进',
         help_text='生成完成后自动进行AI评审，并根据评审意见改进测试用例'
     )
+    enable_auto_revise = models.BooleanField(
+        default=True,
+        verbose_name='启用自动改进',
+        help_text='评审完成后是否自动根据评审意见重写全部测试用例；关闭可跳过耗时最长的重写阶段（仍会输出评审意见）'
+    )
     review_timeout = models.IntegerField(
         default=120,
         verbose_name='评审和改进超时时间（秒）',
@@ -420,6 +425,11 @@ class TestCaseGenerationTask(models.Model):
 
 class AIModelService:
     """AI模型服务类"""
+
+    # 续写上下文窗口（字符数）：命中 max_tokens 需要续写时，仅把已生成内容的“尾部窗口”
+    # 作为 assistant 消息回传，避免每次续写都重传全部历史，从而显著降低长文本生成的输入规模。
+    # 取值需在“模型仍能接续上文/延续编号”与“减少重传”之间平衡，可按需调整（调大更保守）。
+    CONTINUATION_CONTEXT_MAX_CHARS = 15000
 
     @staticmethod
     def get_openai_compatible_headers(api_key: str) -> Dict[str, str]:
@@ -702,15 +712,25 @@ class AIModelService:
                     # 将本次生成的内容作为 assistant 回复加入历史
                     # 注意：如果之前已经有assistant消息，需要追加内容而不是新增消息
                     if current_messages[-1]['role'] == 'assistant':
-                        current_messages[-1]['content'] += chunk_content_buffer
+                        merged_content = current_messages[-1]['content'] + chunk_content_buffer
                     else:
-                        current_messages.append({"role": "assistant", "content": chunk_content_buffer})
+                        merged_content = chunk_content_buffer
+
+                    # 只保留尾部窗口，避免续写时把全部历史内容重新回传（降低输入规模、加快续写）
+                    max_ctx = AIModelService.CONTINUATION_CONTEXT_MAX_CHARS
+                    if len(merged_content) > max_ctx:
+                        merged_content = merged_content[-max_ctx:]
+
+                    if current_messages[-1]['role'] == 'assistant':
+                        current_messages[-1]['content'] = merged_content
+                    else:
+                        current_messages.append({"role": "assistant", "content": merged_content})
 
                     # 只有当上一条不是user的续写指令时，才添加新的user指令
                     # 防止多次续写时堆叠重复的 user 指令
                     if current_messages[-1]['role'] != 'user':
                         current_messages.append(
-                            {"role": "user", "content": "请继续输出剩余的内容，不要重复已输出的部分，紧接着上文继续。"})
+                            {"role": "user", "content": "请继续输出剩余的内容，不要重复已输出的部分，紧接着上文（从上次中断处）继续，保持原有的编号与格式。"})
 
                     # 发送换行符以分隔续写内容（可选，视模型而定，通常不需要，但为了保险）
                     # yield "\n"

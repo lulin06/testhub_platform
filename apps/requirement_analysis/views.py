@@ -1567,10 +1567,15 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
 
                                 # 获取配置参数，设置默认值
                                 enable_auto_review = gen_config.enable_auto_review if gen_config else True
+                                enable_auto_revise = gen_config.enable_auto_revise if gen_config else True
                                 review_timeout = gen_config.review_timeout if gen_config else 120
 
+                                # 流式中间态写库节流间隔（秒）：降低主表大字段的重写频率，减轻DB压力
+                                STREAM_SAVE_INTERVAL = 0.3
+
                                 logger.info(
-                                    f"任务 {task.task_id} 使用生成配置: auto_review={enable_auto_review}, review_timeout={review_timeout}s")
+                                    f"任务 {task.task_id} 使用生成配置: auto_review={enable_auto_review}, "
+                                    f"auto_revise={enable_auto_revise}, review_timeout={review_timeout}s")
 
                                 loop = asyncio.new_event_loop()
                                 asyncio.set_event_loop(loop)
@@ -1596,15 +1601,20 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
                                         # 转换为异步函数
                                         async_save_stream_buffer = sync_to_async(save_stream_buffer)
 
+                                        # 记录上次写库时间，用于按时间间隔节流（避免每个chunk都重写大字段）
+                                        last_stream_save = {'ts': 0.0}
+
                                         async def stream_callback(chunk):
-                                            """流式回调：实时保存每个chunk到数据库"""
+                                            """流式回调：按节流间隔保存内容到数据库"""
                                             # 先追加到内存中的buffer
                                             task.stream_buffer += chunk
                                             task.stream_position = len(task.stream_buffer)
                                             task.last_stream_update = timezone.now()
 
-                                            # 每10个chunk或当chunk较大时保存一次
-                                            if task.stream_position % 500 < 20 or len(chunk) > 100:
+                                            now_ts = time.time()
+                                            # 距离上次保存超过间隔，或单个chunk较大时，才真正写库
+                                            if now_ts - last_stream_save['ts'] >= STREAM_SAVE_INTERVAL or len(chunk) > 200:
+                                                last_stream_save['ts'] = now_ts
                                                 try:
                                                     await async_save_stream_buffer(task.stream_buffer)
                                                 except Exception as save_error:
@@ -1645,13 +1655,16 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
 
                                                 async_save_review = sync_to_async(save_review_buffer)
 
-                                                async def review_stream_callback(chunk):
-                                                    """流式评审回调"""
-                                                    review_buffer.append(chunk)
-                                                    current_length = sum(len(c) for c in review_buffer)
+                                                # 记录上次写库时间，用于按时间间隔节流
+                                                last_review_save = {'ts': 0.0}
 
-                                                    # 每100字符保存一次
-                                                    if current_length % 100 < 20 or len(chunk) > 50:
+                                                async def review_stream_callback(chunk):
+                                                    """流式评审回调：按节流间隔保存评审内容"""
+                                                    review_buffer.append(chunk)
+
+                                                    now_ts = time.time()
+                                                    if now_ts - last_review_save['ts'] >= STREAM_SAVE_INTERVAL or len(chunk) > 100:
+                                                        last_review_save['ts'] = now_ts
                                                         try:
                                                             content = ''.join(review_buffer)
                                                             await async_save_review(content)
@@ -1688,16 +1701,19 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
                                                         # 转换为异步函数
                                                         async_save_final = sync_to_async(save_final_buffer)
 
+                                                        # 记录上次写库时间，用于按时间间隔节流
+                                                        last_final_save = {'ts': 0.0}
+
                                                         # 创建流式回调函数，实时更新final_test_cases
                                                         async def final_callback(chunk):
-                                                            """流式回调：实时保存最终用例到数据库"""
-                                                            # 实时追加到final_test_cases并保存
+                                                            """流式回调：按节流间隔保存最终用例到数据库"""
+                                                            # 实时追加到final_test_cases
                                                             task.final_test_cases = (
                                                                                             task.final_test_cases or '') + chunk
 
-                                                            # 每100字符或chunk较大时保存一次
-                                                            current_length = len(task.final_test_cases)
-                                                            if current_length % 100 < 20 or len(chunk) > 50:
+                                                            now_ts = time.time()
+                                                            if now_ts - last_final_save['ts'] >= STREAM_SAVE_INTERVAL or len(chunk) > 100:
+                                                                last_final_save['ts'] = now_ts
                                                                 try:
                                                                     await async_save_final(task.final_test_cases)
                                                                 except Exception as save_error:
@@ -1705,15 +1721,21 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
 
                                                         # 添加超时保护，避免任务一直卡住（使用配置的超时时间）
                                                         try:
-                                                            revised_cases = loop.run_until_complete(
-                                                                asyncio.wait_for(
-                                                                    AIModelService.revise_test_cases_based_on_review(
-                                                                        task, generated_cases, task.review_feedback,
-                                                                        callback=final_callback
-                                                                    ),
-                                                                    timeout=review_timeout  # 使用配置的超时时间（秒）
+                                                            if enable_auto_revise:
+                                                                revised_cases = loop.run_until_complete(
+                                                                    asyncio.wait_for(
+                                                                        AIModelService.revise_test_cases_based_on_review(
+                                                                            task, generated_cases, task.review_feedback,
+                                                                            callback=final_callback
+                                                                        ),
+                                                                        timeout=review_timeout  # 使用配置的超时时间（秒）
+                                                                    )
                                                                 )
-                                                            )
+                                                            else:
+                                                                # 关闭自动改进：跳过耗时最长的重写阶段，直接使用生成的用例
+                                                                logger.info(
+                                                                    f"任务 {task.task_id} 已关闭自动改进，跳过重写阶段")
+                                                                revised_cases = generated_cases
                                                         except asyncio.TimeoutError:
                                                             logger.error(
                                                                 f"任务 {task.task_id} 改进阶段超时（{review_timeout}秒），使用原始用例")
@@ -1739,6 +1761,10 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
                                                             # 如果返回为空，保留流式回调保存的内容
                                                             logger.warning(
                                                                 f"任务 {task.task_id} 改进返回为空，使用流式回调保存的内容 (长度: {len(task.final_test_cases) if task.final_test_cases else 0})")
+                                                        # 显式落库最终用例：
+                                                        # 1) 弥补节流写库可能遗漏的尾部内容；
+                                                        # 2) 关闭自动改进(enable_auto_revise=False)时不会触发流式回调，这里保证最终结果不为空。
+                                                        task.save(update_fields=['final_test_cases'])
                                                     except Exception as revise_error:
                                                         logger.warning(
                                                             f"任务 {task.task_id} 改进测试用例失败: {revise_error}，使用原始用例")
@@ -1823,16 +1849,19 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
                                                         # 转换为异步函数
                                                         async_save_final_full = sync_to_async(save_final_buffer_full)
 
+                                                        # 记录上次写库时间，用于按时间间隔节流
+                                                        last_final_save_full = {'ts': 0.0}
+
                                                         # 创建流式回调函数，实时更新final_test_cases
                                                         async def final_callback_full(chunk):
-                                                            """流式回调：实时保存最终用例到数据库"""
-                                                            # 实时追加到final_test_cases并保存
+                                                            """流式回调：按节流间隔保存最终用例到数据库"""
+                                                            # 实时追加到final_test_cases
                                                             task.final_test_cases = (
                                                                                             task.final_test_cases or '') + chunk
 
-                                                            # 每100字符或chunk较大时保存一次
-                                                            current_length = len(task.final_test_cases)
-                                                            if current_length % 100 < 20 or len(chunk) > 50:
+                                                            now_ts = time.time()
+                                                            if now_ts - last_final_save_full['ts'] >= STREAM_SAVE_INTERVAL or len(chunk) > 100:
+                                                                last_final_save_full['ts'] = now_ts
                                                                 try:
                                                                     await async_save_final_full(task.final_test_cases)
                                                                 except Exception as save_error:
@@ -1840,15 +1869,21 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
 
                                                         # 添加超时保护，避免任务一直卡住（使用配置的超时时间）
                                                         try:
-                                                            revised_cases = loop.run_until_complete(
-                                                                asyncio.wait_for(
-                                                                    AIModelService.revise_test_cases_based_on_review(
-                                                                        task, generated_cases, task.review_feedback,
-                                                                        callback=final_callback_full
-                                                                    ),
-                                                                    timeout=review_timeout  # 使用配置的超时时间（秒）
+                                                            if enable_auto_revise:
+                                                                revised_cases = loop.run_until_complete(
+                                                                    asyncio.wait_for(
+                                                                        AIModelService.revise_test_cases_based_on_review(
+                                                                            task, generated_cases, task.review_feedback,
+                                                                            callback=final_callback_full
+                                                                        ),
+                                                                        timeout=review_timeout  # 使用配置的超时时间（秒）
+                                                                    )
                                                                 )
-                                                            )
+                                                            else:
+                                                                # 关闭自动改进：跳过耗时最长的重写阶段，直接使用生成的用例
+                                                                logger.info(
+                                                                    f"任务 {task.task_id} 已关闭自动改进，跳过重写阶段")
+                                                                revised_cases = generated_cases
                                                         except asyncio.TimeoutError:
                                                             logger.error(
                                                                 f"任务 {task.task_id} 改进阶段超时（{review_timeout}秒），使用原始用例")
@@ -1874,6 +1909,10 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
                                                             # 如果返回为空，保留流式回调保存的内容
                                                             logger.warning(
                                                                 f"任务 {task.task_id} 改进返回为空，使用流式回调保存的内容 (长度: {len(task.final_test_cases) if task.final_test_cases else 0})")
+                                                        # 显式落库最终用例：
+                                                        # 1) 弥补节流写库可能遗漏的尾部内容；
+                                                        # 2) 关闭自动改进(enable_auto_revise=False)时不会触发流式回调，这里保证最终结果不为空。
+                                                        task.save(update_fields=['final_test_cases'])
                                                     except Exception as revise_error:
                                                         logger.warning(
                                                             f"任务 {task.task_id} 改进测试用例失败: {revise_error}，使用原始用例")
@@ -2089,8 +2128,14 @@ class TestCaseGenerationTaskViewSet(viewsets.ModelViewSet):
                         break
 
                     # 从数据库重新获取任务状态
+                    # 性能优化：仅刷新SSE轮询真正用到的字段，避免每0.5s把整行大字段
+                    # （如 requirement_text / generated_test_cases / generation_log）都拉回来
                     try:
-                        task.refresh_from_db()
+                        task.refresh_from_db(fields=[
+                            'status', 'progress', 'output_mode',
+                            'stream_buffer', 'stream_position',
+                            'review_feedback', 'final_test_cases'
+                        ])
                     except TestCaseGenerationTask.DoesNotExist:
                         yield f"event: error\ndata: task_not_found\n\n"
                         break
@@ -3317,7 +3362,8 @@ class ConfigStatusViewSet(viewsets.ViewSet):
                     'id': generation_config.id if generation_config else None,
                     'required': True,
                     'default_output_mode': generation_config.default_output_mode if generation_config else None,
-                    'enable_auto_review': generation_config.enable_auto_review if generation_config else None
+                    'enable_auto_review': generation_config.enable_auto_review if generation_config else None,
+                    'enable_auto_revise': generation_config.enable_auto_revise if generation_config else None
                 }
             }
 
