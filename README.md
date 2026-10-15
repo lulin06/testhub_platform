@@ -213,10 +213,21 @@ npm run build      # Production build
 
 ### Docker deployment (optional)
 
+From the repository root, copy `.env.example` to `.env` and set at least
+`SECRET_KEY`, `DB_PASSWORD`, and the allowed hosts/origins for the address where
+the application will be accessed. The Docker image runs Nginx, Daphne, Celery,
+the scheduler, MySQL, and Redis in one container:
+
 ```bash
-./build-and-push.sh    # Build and push images
-docker-compose up -d   # Start the full stack
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+docker compose --env-file .env -f docker/docker-compose.yml logs -f testhub
+
+# Create the first administrator after the container is healthy.
+docker compose --env-file .env -f docker/docker-compose.yml exec testhub python manage.py createsuperuser
 ```
+
+For a multi-platform image, use `bash docker/build-multiplatform.sh --push` after
+setting `DOCKER_REGISTRY`, `DOCKER_NAMESPACE`, and `IMAGE_VERSION`.
 
 ## Configuration
 

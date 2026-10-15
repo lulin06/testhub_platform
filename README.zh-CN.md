@@ -214,10 +214,21 @@ npm run build      # 生产构建
 
 ### Docker 部署（可选）
 
+在项目根目录将 `.env.example` 复制为 `.env`，至少配置
+`SECRET_KEY`、`DB_PASSWORD`，并按实际访问地址配置允许的主机和来源。
+Docker 镜像会在同一个容器内运行 Nginx、Daphne、Celery、调度器、MySQL 和
+Redis：
+
 ```bash
-./build-and-push.sh    # 构建并推送镜像
-docker-compose up -d   # 一键启动全栈服务
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+docker compose --env-file .env -f docker/docker-compose.yml logs -f testhub
+
+# 容器健康后创建第一个管理员账号
+docker compose --env-file .env -f docker/docker-compose.yml exec testhub python manage.py createsuperuser
 ```
+
+构建多平台镜像时，先配置 `DOCKER_REGISTRY`、`DOCKER_NAMESPACE` 和
+`IMAGE_VERSION`，然后执行 `bash docker/build-multiplatform.sh --push`。
 
 ## 🔧 配置说明
 

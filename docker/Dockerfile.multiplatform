@@ -62,21 +62,23 @@ RUN mkdir -p /app/logs /app/media /app/static_files /app/perf_workspace /var/lib
     && sed -i 's/\r$//' /app/allure/bin/allure \
     && chmod +x /app/allure/bin/allure
 
-# 以下辅助文件仅在镜像内部生成，仓库只维护允许的六个部署文件。
+# 启动脚本、数据库初始化和 Supervisor 配置属于同一个镜像启动契约，集中维护在此处。
 RUN <<'BUILD'
 cat > /usr/local/bin/testhub-start <<'SH'
 #!/bin/sh
 set -eu
+
 : "${DB_PASSWORD:?DB_PASSWORD must be configured}"
 : "${SECRET_KEY:?SECRET_KEY must be configured}"
+
 mkdir -p /run/mysqld /var/lib/mysql /var/lib/redis
 chown -R mysql:mysql /var/lib/mysql /run/mysqld
 if [ ! -d /var/lib/mysql/mysql ]; then
     mysqld --no-defaults --initialize-insecure --user=mysql --datadir=/var/lib/mysql
 fi
+
 exec /usr/bin/supervisord -n -c /etc/supervisor/testhub.conf
 SH
-chmod +x /usr/local/bin/testhub-start
 
 cat > /usr/local/bin/testhub-bootstrap.py <<'PYTHON'
 import os
@@ -84,25 +86,34 @@ import re
 import subprocess
 import sys
 import time
+
 import pymysql
 
-name = os.environ.get('DB_NAME', 'testhub')
-user = os.environ.get('DB_USER', 'testhub')
-password = os.environ['DB_PASSWORD']
-root_password = os.environ.get('MYSQL_ROOT_PASSWORD') or password
-if not re.fullmatch(r'[A-Za-z0-9_]+', name):
-    raise ValueError('DB_NAME must contain only letters, digits and underscores')
-if not re.fullmatch(r'[A-Za-z0-9_]+', user) or user == 'root':
+
+def identifier(value, name):
+    if not re.fullmatch(r'[A-Za-z0-9_]+', value):
+        raise ValueError(f'{name} must contain only letters, digits and underscores')
+    return value
+
+
+database = identifier(os.environ.get('DB_NAME', 'testhub'), 'DB_NAME')
+user = identifier(os.environ.get('DB_USER', 'testhub'), 'DB_USER')
+if user == 'root':
     raise ValueError('DB_USER must be a regular database user, not root')
 
-# 空卷首次使用空 root 密码；重启使用配置中的 root 密码。不要覆盖已有卷的未知密码。
+password = os.environ['DB_PASSWORD']
+root_password = os.environ.get('MYSQL_ROOT_PASSWORD') or password
+
 connection = None
-for attempt in range(90):
+for _ in range(90):
     for candidate in (root_password, ''):
         try:
             connection = pymysql.connect(
-                unix_socket='/run/mysqld/mysqld.sock', user='root', password=candidate,
-                autocommit=True, connect_timeout=2,
+                unix_socket='/run/mysqld/mysqld.sock',
+                user='root',
+                password=candidate,
+                autocommit=True,
+                connect_timeout=2,
             )
             break
         except pymysql.MySQLError:
@@ -110,23 +121,45 @@ for attempt in range(90):
     if connection is not None:
         break
     time.sleep(1)
+
 if connection is None:
-    raise RuntimeError('MySQL startup/authentication failed; check logs and existing volume credentials')
+    raise RuntimeError(
+        'MySQL startup/authentication failed; check logs and existing volume credentials'
+    )
+
 with connection.cursor() as cursor:
-    cursor.execute(f'CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')
-    account = f"{connection.escape(user)}@'localhost'"
-    cursor.execute(f'CREATE USER IF NOT EXISTS {account} IDENTIFIED BY {connection.escape(password)}')
-    # 与 MySQL 初始化行为一致，已有应用用户密码不在每次启动时覆盖。
-    cursor.execute(f'GRANT ALL PRIVILEGES ON `{name}`.* TO {account}')
-    cursor.execute(f"ALTER USER 'root'@'localhost' IDENTIFIED BY {connection.escape(root_password)}")
+    quoted_database = connection.escape(database)
+    quoted_user = connection.escape(user)
+    quoted_password = connection.escape(password)
+    quoted_root_password = connection.escape(root_password)
+    cursor.execute(
+        f'CREATE DATABASE IF NOT EXISTS `{database}` '
+        'CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+    )
+    # Django connects over 127.0.0.1 in Compose, while local tools may use a socket.
+    for host in ('localhost', '127.0.0.1'):
+        account = f'{quoted_user}@{connection.escape(host)}'
+        cursor.execute(f'CREATE USER IF NOT EXISTS {account} IDENTIFIED BY {quoted_password}')
+        cursor.execute(f'GRANT ALL PRIVILEGES ON `{database}`.* TO {account}')
+    cursor.execute(f"ALTER USER 'root'@'localhost' IDENTIFIED BY {quoted_root_password}")
+
 connection.close()
 
 subprocess.run([sys.executable, 'manage.py', 'migrate', '--noinput'], check=True)
 subprocess.run([sys.executable, 'manage.py', 'collectstatic', '--noinput'], check=True)
-subprocess.run([
-    '/usr/bin/supervisorctl', '-c', '/etc/supervisor/testhub.conf',
-    'start', 'daphne', 'worker', 'scheduler', 'nginx',
-], check=True)
+subprocess.run(
+    [
+        '/usr/bin/supervisorctl',
+        '-c',
+        '/etc/supervisor/testhub.conf',
+        'start',
+        'daphne',
+        'worker',
+        'scheduler',
+        'nginx',
+    ],
+    check=True,
+)
 PYTHON
 
 cat > /etc/supervisor/testhub.conf <<'CONF'
@@ -235,5 +268,11 @@ stderr_logfile_maxbytes=0
 CONF
 BUILD
 
+# Dockerfile heredocs preserve source line endings. Normalize generated files
+# before they are executed so Windows checkouts cannot introduce a trailing CR.
+RUN sed -i 's/\r$//' /usr/local/bin/testhub-start /usr/local/bin/testhub-bootstrap.py /etc/supervisor/testhub.conf \
+    && chmod 0755 /usr/local/bin/testhub-start
+
+
 EXPOSE 80
-CMD ["/usr/local/bin/testhub-start"]
+CMD ["/bin/sh", "/usr/local/bin/testhub-start"]
