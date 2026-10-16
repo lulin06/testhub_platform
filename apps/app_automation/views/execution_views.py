@@ -83,12 +83,8 @@ class AppTestExecutionViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            # 停止 Celery 任务
-            if execution.task_id:
-                from celery import current_app
-                current_app.control.revoke(execution.task_id, terminate=True, signal='SIGTERM')
-                logger.info(f"Celery任务已终止: task_id={execution.task_id}")
-            
+            # Django-Q2 does not expose Celery-style process termination. The
+            # task checks this persisted state before committing results.
             execution.status = 'stopped'
             execution.finished_at = timezone.now()
             if execution.started_at:

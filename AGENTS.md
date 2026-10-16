@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-TestHub is an AI-driven test management platform built with Django 4.2 (backend) + Vue 3 (frontend). It provides test case management, API testing, UI automation testing, APP (mobile) automation testing, test data generation (data factory), user behavior analytics, AI-powered requirement analysis, and test case generation capabilities.
+TestHub is an AI-driven test management platform built with Django 6.0 (backend) + Vue 3 (frontend). It provides test case management, API testing, UI automation testing, APP (mobile) automation testing, test data generation (data factory), user behavior analytics, AI-powered requirement analysis, and test case generation capabilities.
 
 ## Common Commands
 
@@ -119,7 +119,7 @@ The Django project uses a modular app structure under `apps/`:
 
 ### Key Configuration Files
 
-- `backend/settings.py`: Django settings (database, REST framework, CORS, Celery, email, Channels, analytics)
+- `backend/settings.py`: Django settings (database, REST framework, CORS, Django-Q2, email, Channels, analytics)
 - `backend/asgi.py`: ASGI entry; enables WebSocket (Channels) when `channels` is installed, degrades to HTTP-only otherwise
 - `backend/urls.py`: Root URL configuration
 - `frontend/vite.config.js`: Vite build configuration
@@ -179,7 +179,7 @@ Custom prompts for AI test case generation are defined in:
 
 ## Key Dependencies
 
-Backend: Django REST Framework, drf-spectacular, django-filter, Celery, httpx, Selenium, Playwright, browser-use, langchain-openai, Channels + Daphne + channels-redis (WebSocket), Airtest + EasyOCR + OpenCV (APP automation), PyPDF/python-docx/reportlab/openpyxl (document handling), python-barcode/qrcode/pyzbar, Redis.
+Backend: Django REST Framework, drf-spectacular, django-filter, Django-Q2, httpx, Selenium, Playwright, browser-use, langchain-openai, Channels + Daphne + channels-redis (WebSocket), Airtest + EasyOCR + OpenCV (APP automation), PyPDF/python-docx/reportlab/openpyxl (document handling), python-barcode/qrcode/pyzbar, Redis.
 
 Frontend: Vue 3, Element Plus, Pinia, Vue Router, Axios, ECharts, Monaco Editor, vue-i18n, vuedraggable, curlconverter, dayjs, lodash-es, xlsx.
 

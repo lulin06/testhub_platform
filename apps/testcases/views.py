@@ -197,8 +197,9 @@ class TestCaseImportRecordListCreateView(generics.ListCreateAPIView):
             template_version='v1'
         )
 
-        celery_task = import_testcases_from_excel.delay(record.id)
-        record.celery_task_id = celery_task.id
+        from apps.core.task_queue import enqueue_task
+        task_id = enqueue_task(import_testcases_from_excel, record.id)
+        record.celery_task_id = task_id
         record.save(update_fields=['celery_task_id', 'updated_at'])
 
         serializer = self.get_serializer(record)

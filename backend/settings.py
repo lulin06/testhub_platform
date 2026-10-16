@@ -40,6 +40,7 @@ THIRD_PARTY_APPS = [
     'django_filters',
     'drf_spectacular',
     'channels',
+    'django_q',
 ]
 
 ANALYTICS_ENABLED = config('ANALYTICS_ENABLED', default=False, cast=bool)
@@ -320,13 +321,20 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
-# Redis URL (used across celery, channels, and SMS verification)
+# Redis URL (used by Channels and SMS verification)
 REDIS_URL = config('REDIS_URL', default='redis://:1234@127.0.0.1:6379/0')
 
-# Celery Configuration
-CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
-CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+# Django-Q2 configuration. Tasks and results are stored in the Django database.
+# Redis remains dedicated to Channels/SMS and is not a task broker.
+Q_CLUSTER = {
+    'name': config('Q_CLUSTER_NAME', default='testhub'),
+    'workers': config('Q_CLUSTER_WORKERS', default=2, cast=int),
+    'timeout': config('Q_CLUSTER_TIMEOUT', default=3600, cast=int),
+    'retry': config('Q_CLUSTER_RETRY', default=3660, cast=int),
+    'queue_limit': config('Q_CLUSTER_QUEUE_LIMIT', default=50, cast=int),
+    'bulk': config('Q_CLUSTER_BULK', default=1, cast=int),
+    'orm': 'default',
+}
 
 # Channels Configuration
 CHANNEL_LAYERS = {

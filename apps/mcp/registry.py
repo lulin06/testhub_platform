@@ -122,8 +122,8 @@ _TOOLS = [
         domain='perf-testing',
         summary='触发或获取压测失败的 AI 分析',
         description='压测失败 AI 分析：命中缓存时即时返回分析结果（status=completed）；'
-                    '未命中时投递 Celery 异步分析任务并返回 status=accepted，'
-                    '约 30 秒后再次调用本工具获取结果。依赖 Celery，不可用时报错并提示改用页面 SSE 入口。',
+                    '未命中时投递 Django-Q2 异步分析任务并返回 status=accepted，'
+                    '约 30 秒后再次调用本工具获取结果。队列不可用时报错并提示改用页面 SSE 入口。',
         read_only=False, idempotent=False, open_world=True,
         examples=({'execution_id': 42},),
     ),

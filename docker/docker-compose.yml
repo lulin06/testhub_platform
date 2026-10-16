@@ -1,5 +1,5 @@
 # 在项目根目录运行（Windows PowerShell）：docker compose --env-file .env -f docker/docker-compose.yml up -d --build
-# 只构建一个镜像；MySQL 8.4、Redis、Nginx、Daphne、Celery 和调度器在同一容器内运行。
+# 只构建一个镜像；MySQL 8.4、Redis、Nginx、Daphne、Django-Q2 和调度器在同一容器内运行。
 # 复用项目已有 .env，不创建新的环境文件。
 # 管理员：docker compose --env-file .env -f docker/docker-compose.yml exec testhub python manage.py createsuperuser
 # 日志：docker compose --env-file .env -f docker/docker-compose.yml logs -f testhub

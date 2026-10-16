@@ -316,11 +316,11 @@ def get_report(ctx: Context, execution_id: int) -> dict:
 
 
 def analyze_failure(ctx: Context, execution_id: int) -> dict:
-    """压测失败 AI 分析：命中缓存即时返回，否则触发 Celery 异步分析。
+    """压测失败 AI 分析：命中缓存即时返回，否则触发 Django-Q2 异步分析。
 
     命中缓存返回 {status: 'completed', ...分析结果}；未命中时投递异步任务
     返回 {status: 'accepted', hint}，约 30 秒后再次调用本工具获取结果。
-    依赖 Celery，不可用时报错并提示改用平台页面 SSE 分析入口。
+    队列不可用时报错并提示改用平台页面 SSE 分析入口。
     """
 
     def run(user):
@@ -342,10 +342,11 @@ def analyze_failure(ctx: Context, execution_id: int) -> dict:
 
         from apps.perf_testing.tasks import analyze_perf_execution_task
         try:
-            analyze_perf_execution_task.delay(execution.id)
-        except Exception as e:  # noqa: BLE001 - Celery 不可用时给出明确指引
+            from apps.core.task_queue import enqueue_task
+            enqueue_task(analyze_perf_execution_task, execution.id)
+        except Exception as e:  # noqa: BLE001 - 队列不可用时给出明确指引
             raise ToolError(
-                f'AI 分析任务投递失败（Celery 不可用: {e}），'
+                f'AI 分析任务投递失败（任务队列不可用: {e}），'
                 f'可稍后重试或使用平台页面 SSE 分析入口') from e
         return {
             'status': 'accepted',

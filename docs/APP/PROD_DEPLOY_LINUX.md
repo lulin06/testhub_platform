@@ -98,12 +98,12 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-### 5.2 Celery Worker 服务
-`/etc/systemd/system/testhub-celery.service`
+### 5.2 Django-Q2 Worker 服务
+`/etc/systemd/system/testhub-qcluster.service`
 
 ```ini
 [Unit]
-Description=TestHub Celery Worker
+Description=TestHub Django-Q2 Worker
 After=network.target
 
 [Service]
@@ -112,7 +112,7 @@ WorkingDirectory=/opt/testhub_platform
 Environment="DJANGO_SETTINGS_MODULE=backend.settings"
 Environment="PYTHONUNBUFFERED=1"
 EnvironmentFile=/opt/testhub_platform/.env
-ExecStart=/opt/testhub_platform/venv/bin/celery -A backend worker --loglevel=info --pool=solo --concurrency=1
+ExecStart=/opt/testhub_platform/venv/bin/python manage.py qcluster
 Restart=always
 
 [Install]
@@ -122,17 +122,17 @@ WantedBy=multi-user.target
 ### 5.3 启动服务
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable testhub-asgi testhub-celery
-sudo systemctl start testhub-asgi testhub-celery
+sudo systemctl enable testhub-asgi testhub-qcluster
+sudo systemctl start testhub-asgi testhub-qcluster
 ```
 
 ### 5.4 状态与日志
 ```bash
 sudo systemctl status testhub-asgi
-sudo systemctl status testhub-celery
+sudo systemctl status testhub-qcluster
 
 journalctl -u testhub-asgi -f
-journalctl -u testhub-celery -f
+journalctl -u testhub-qcluster -f
 ```
 
 ---
@@ -267,9 +267,9 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/testhub-celery.service <<EOF
+cat > /etc/systemd/system/testhub-qcluster.service <<EOF
 [Unit]
-Description=TestHub Celery Worker
+Description=TestHub Django-Q2 Worker
 After=network.target
 
 [Service]
@@ -278,7 +278,7 @@ WorkingDirectory=$APP_DIR
 Environment="DJANGO_SETTINGS_MODULE=backend.settings"
 Environment="PYTHONUNBUFFERED=1"
 EnvironmentFile=$APP_DIR/.env
-ExecStart=$VENV_DIR/bin/celery -A backend worker --loglevel=info --pool=solo --concurrency=1
+ExecStart=$VENV_DIR/bin/python manage.py qcluster
 Restart=always
 
 [Install]
@@ -286,8 +286,8 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable testhub-asgi testhub-celery
-systemctl restart testhub-asgi testhub-celery
+systemctl enable testhub-asgi testhub-qcluster
+systemctl restart testhub-asgi testhub-qcluster
 
 echo "=== 6) Nginx 配置 ==="
 cat > "$NGINX_CONF" <<EOF

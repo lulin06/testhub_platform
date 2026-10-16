@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# 一个最终镜像 / 一个容器：MySQL 8.4、Redis、Nginx、Daphne、Celery、调度器。
+# 一个最终镜像 / 一个容器：MySQL 8.4、Redis、Nginx、Daphne、Django-Q2、调度器。
 # Node 阶段只编译前端，不输出独立前端镜像。
 FROM node:22-alpine AS frontend-builder
 WORKDIR /build/frontend
@@ -228,7 +228,7 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 
 [program:worker]
-command=/usr/local/bin/celery -A backend worker --loglevel=info --concurrency=2
+command=/usr/local/bin/python manage.py qcluster
 directory=/app
 priority=30
 autostart=false

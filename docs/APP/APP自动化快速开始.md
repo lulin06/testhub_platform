@@ -46,14 +46,11 @@ pip install loguru>=0.7.0
 pip install allure-pytest>=2.15.0
 ```
 
-### 3. 启动 Celery Worker
+### 3. 启动 Django-Q2 Worker
 
 ```bash
-# Windows
-celery -A backend worker -l info -P eventlet
-
-# Linux/macOS
-celery -A backend worker -l info
+# Windows / Linux / macOS
+python manage.py qcluster
 ```
 
 ### 4. 准备 Android 设备
@@ -185,7 +182,7 @@ curl http://localhost:8000/api/app-automation/executions/1/ \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-**查看 Celery 日志**:
+**查看 Django-Q2 日志**:
 ```
 [2026-02-04 11:36:00,000: INFO] 开始执行APP测试: 简单点击测试
 [2026-02-04 11:36:05,000: INFO] 设备已锁定: emulator-5554
@@ -507,12 +504,12 @@ adb kill-server
 adb start-server
 ```
 
-### Q3: Celery 任务不执行？
+### Q3: Django-Q2 任务不执行？
 
-**A**: 确保 Celery Worker 已启动：
+**A**: 确保 Django-Q2 Worker 已启动：
 ```bash
-# 查看 Celery 日志
-celery -A backend worker -l info -P eventlet
+# 启动 Django-Q2 Worker
+python manage.py qcluster
 ```
 
 ### Q4: Airtest 初始化失败？
@@ -537,10 +534,10 @@ adb shell pm list packages
 
 ## 📊 监控和调试
 
-### 1. 查看 Celery 日志
+### 1. 查看 Django-Q2 日志
 
 ```bash
-# 实时查看 Celery Worker 输出
+# 实时查看 Django-Q2 Worker 输出
 # 会显示所有任务执行情况
 ```
 
@@ -606,18 +603,10 @@ for elem in elements:
 
 ### 2. 定时执行（扩展）
 
-可以结合 Django-Celery-Beat 实现定时执行：
+项目使用调度管理命令实现定时执行：
 
-```python
-from celery.schedules import crontab
-
-CELERY_BEAT_SCHEDULE = {
-    'run-app-test-every-hour': {
-        'task': 'apps.app_automation.tasks.execute_app_test_task',
-        'schedule': crontab(minute=0, hour='*/1'),
-        'args': (1,)  # execution_id
-    },
-}
+```bash
+python manage.py run_all_scheduled_tasks
 ```
 
 ### 3. 自定义 Allure 报告

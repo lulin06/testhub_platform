@@ -1,6 +1,6 @@
 """JudgeService：评分引擎对外统一入口。
 
-被 Django View（同步）和 Celery Task（异步批量）共同调用。
+被 Django View（同步）和 Django-Q2 Task（异步批量）共同调用。
 职责：
 1. 加载 Rubric（DB → YAML fallback）
 2. auto_gt 自动匹配 ground_truth
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class JudgeService:
-    """评分服务（无状态，可被 View/Celery 反复实例化）。"""
+    """评分服务（无状态，可被 View/Django-Q2 反复实例化）。"""
 
     def __init__(self, rubric_id: Optional[int] = None):
         self.rubric_id = rubric_id
