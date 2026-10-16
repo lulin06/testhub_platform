@@ -25,7 +25,6 @@ export default {
     aiCaseGeneration: 'AI用例生成',
     aiGeneratedTestcases: 'AI生成用例记录',
     promptConfig: '提示词配置',
-    projectManagement: '项目管理',
     testCases: '测试用例',
     versionManagement: '版本管理',
     reviewManagement: '评审管理',
@@ -75,6 +74,7 @@ export default {
     aiModeConfig: 'AI智能模式配置',
     scheduledTaskConfig: '定时任务配置',
     difyConfig: 'AI评测师配置',
+    projectManagement: '项目管理',
 
     // 智能评分器
     judgeDashboard: '评分看板',

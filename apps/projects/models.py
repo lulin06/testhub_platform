@@ -1,6 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from apps.users.models import User
+from .managers import ActiveProjectManager
 
 class Project(models.Model):
     """项目模型"""
@@ -14,10 +15,19 @@ class Project(models.Model):
     name = models.CharField(max_length=200, verbose_name='项目名称')
     description = models.TextField(blank=True, verbose_name='项目描述')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active', verbose_name='状态')
+    modules = models.JSONField(default=list, blank=True, verbose_name='关联模块')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_projects', verbose_name='负责人')
     members = models.ManyToManyField(User, through='ProjectMember', related_name='joined_projects', verbose_name='成员')
     created_at = models.DateTimeField(default=timezone.now, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+    is_deleted = models.BooleanField(default=False, verbose_name='是否删除')
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name='删除时间')
+    deleted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deleted_projects', verbose_name='删除人'
+    )
+    objects = ActiveProjectManager()
+    all_objects = models.Manager()
     
     def __str__(self):
         return self.name

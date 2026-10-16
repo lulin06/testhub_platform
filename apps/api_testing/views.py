@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 from .utils import execute_assertions
 from .operation_logger import log_operation
+from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 from .variable_resolver import VariableResolver
 from .serializers import (
     ApiProjectSerializer, ApiCollectionSerializer, ApiRequestSerializer,
@@ -74,13 +75,15 @@ class ApiProjectViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        return ApiProject.objects.filter(
+        return ApiProject.objects.filter(is_deleted=False).filter(
             models.Q(owner=user) | models.Q(members=user)
         ).distinct()
     
     def perform_create(self, serializer):
         """创建项目时记录日志"""
         instance = serializer.save()
+        ensure_workspace_project_for_module(instance, 'api', self.request.user)
+        sync_project_members_from_module(instance)
         log_operation(
             operation_type='create',
             resource_type='project',
@@ -92,6 +95,8 @@ class ApiProjectViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """更新项目时记录日志"""
         instance = serializer.save()
+        sync_project_members_from_module(instance)
+        sync_workspace_project_from_module(instance, 'api')
         log_operation(
             operation_type='edit',
             resource_type='project',
@@ -109,7 +114,7 @@ class ApiProjectViewSet(viewsets.ModelViewSet):
             resource_name=instance.name,
             user=self.request.user
         )
-        instance.delete()
+        soft_delete_module_project(instance, self.request.user)
     
     @action(detail=False, methods=['post'], url_path='create-sample')
     def create_sample_project(self, request):

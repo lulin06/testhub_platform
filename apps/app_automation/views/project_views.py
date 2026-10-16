@@ -14,6 +14,7 @@ from ..serializers import (
     AppProjectCreateSerializer,
     AppProjectUpdateSerializer,
 )
+from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,18 @@ class AppProjectViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        return AppProject.objects.filter(
+        return AppProject.objects.filter(is_deleted=False).filter(
             models.Q(owner=user) | models.Q(members=user)
         ).distinct()
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        instance = serializer.save(owner=self.request.user)
+        ensure_workspace_project_for_module(instance, 'app', self.request.user)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        sync_project_members_from_module(instance)
+        sync_workspace_project_from_module(instance, 'app')
+
+    def perform_destroy(self, instance):
+        soft_delete_module_project(instance, self.request.user)

@@ -43,6 +43,7 @@ from .serializers import (
     AICaseSerializer, AIExecutionRecordSerializer
 )
 from .operation_logger import log_operation
+from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -140,25 +141,28 @@ class UiProjectViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # 只显示用户有权限访问的项目
         user = self.request.user
-        return UiProject.objects.filter(
+        return UiProject.objects.filter(is_deleted=False).filter(
             models.Q(owner=user) | models.Q(members=user)
         ).distinct()
 
     def perform_create(self, serializer):
         # 创建项目时，当前用户自动成为负责人
         instance = serializer.save(owner=self.request.user)
+        ensure_workspace_project_for_module(instance, 'ui', self.request.user)
         # 记录操作
         log_operation('create', 'project', instance.id, instance.name, self.request.user)
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        sync_project_members_from_module(instance)
+        sync_workspace_project_from_module(instance, 'ui')
         # 记录操作
         log_operation('edit', 'project', instance.id, instance.name, self.request.user)
 
     def perform_destroy(self, instance):
         # 记录操作（在删除前记录）
         log_operation('delete', 'project', instance.id, instance.name, self.request.user)
-        instance.delete()
+        soft_delete_module_project(instance, self.request.user)
 
 
 class LocatorStrategyViewSet(viewsets.ModelViewSet):

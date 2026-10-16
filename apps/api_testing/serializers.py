@@ -42,7 +42,7 @@ class ApiProjectSerializer(serializers.ModelSerializer):
             'owner', 'members', 'member_ids', 'start_date', 'end_date',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'workspace_project', 'is_deleted', 'deleted_at', 'deleted_by']
 
     def validate(self, attrs):
         # 将空字符串转换为 None

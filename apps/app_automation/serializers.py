@@ -31,7 +31,7 @@ class AppProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = AppProject
         fields = '__all__'
-        read_only_fields = ('created_at', 'updated_at')
+        read_only_fields = ('created_at', 'updated_at', 'workspace_project', 'is_deleted', 'deleted_at', 'deleted_by')
 
     def get_owner_name(self, obj):
         return obj.owner.username if obj.owner else None

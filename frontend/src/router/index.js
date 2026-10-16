@@ -412,7 +412,7 @@ const routes = [
                 children: [
                     {
                         path: '',
-                        redirect: 'ai-model'
+                        redirect: 'projects'
                     },
                     {
                         path: 'ai-model',
@@ -453,6 +453,11 @@ const routes = [
                         path: 'dify',
                         name: 'DifyConfig',
                         component: () => import('@/views/configuration/DifyConfig.vue')
+                    },
+                    {
+                        path: 'projects',
+                        name: 'ConfigProjects',
+                        component: () => import('@/views/configuration/ProjectManagement.vue')
                     }
                 ]
             }

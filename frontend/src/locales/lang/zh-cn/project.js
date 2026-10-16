@@ -49,6 +49,7 @@ export default {
     noDescription: '暂无描述',
     projectMembers: '项目成员',
     addMember: '添加成员',
+    selectMember: '请选择成员',
     username: '用户名',
     email: '邮箱',
     role: '角色',
@@ -63,7 +64,10 @@ export default {
     no: '否',
     fetchDetailFailed: '获取项目详情失败',
     memberDeleteSuccess: '成员删除成功',
-    memberDeleteFailed: '删除成员失败'
+    memberDeleteFailed: '删除成员失败',
+    memberDeleteConfirm: '确定要移除该成员吗？',
+    memberAddSuccess: '成员添加成功',
+    memberAddFailed: '添加成员失败'
   },
   home: {
     // Header

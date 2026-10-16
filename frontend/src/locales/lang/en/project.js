@@ -49,6 +49,7 @@ export default {
     noDescription: 'No description',
     projectMembers: 'Project Members',
     addMember: 'Add Member',
+    selectMember: 'Select a member',
     username: 'Username',
     email: 'Email',
     role: 'Role',
@@ -63,7 +64,10 @@ export default {
     no: 'No',
     fetchDetailFailed: 'Failed to fetch project details',
     memberDeleteSuccess: 'Member deleted successfully',
-    memberDeleteFailed: 'Failed to delete member'
+    memberDeleteFailed: 'Failed to delete member',
+    memberDeleteConfirm: 'Remove this member from the project?',
+    memberAddSuccess: 'Member added successfully',
+    memberAddFailed: 'Failed to add member'
   },
   home: {
     // Header
