@@ -125,7 +125,7 @@ class JudgeBatchViewSet(viewsets.ModelViewSet):
             rubric=rubric,
             cases_data=data['cases'],
             total=len(data['cases']),
-            status='running',   # 避免 delay 失败还显示「排队中」；实际是否入队由 celery_task_id/error_message 反映
+            status='running',
             is_paused=False,
             results_buffer=[],
             error_count=0,
@@ -134,77 +134,16 @@ class JudgeBatchViewSet(viewsets.ModelViewSet):
         )
 
         from .tasks import score_batch_task
-        from celery import current_app as _celery_app
-
-        sync_fallback_msg = None
-
-        def _broker_reachable(timeout: float = 2.0) -> bool:
-            '''用 kombu 自带连接探测，2s 内失败即视为 Celery/Broker 不可用，避免用户 HTTP 阻塞 50s。
-            '''
-            try:
-                from kombu import Connection as _KombuConn
-                url = getattr(_celery_app.conf, 'broker_url', None) or getattr(_celery_app.connection(), 'as_uri', lambda: '')()
-                if not url or url.startswith('memory') or url.startswith('sqla'):
-                    return True
-                transport_options = {'connect_timeout': timeout, 'socket_timeout': timeout,
-                                     'socket_connect_timeout': timeout,
-                                     'retry_on_timeout': False, 'max_retries': 0}
-                with _KombuConn(url, connect_timeout=timeout, transport_options=transport_options) as conn:
-                    conn.ensure_connection(max_retries=0, timeout=timeout)
-                return True
-            except Exception as prob_err:
-                logger.info(f'[JudgeBatch#{batch.id}] Celery broker 不可达（{prob_err}），切后台线程执行')
-                return False
-
-        def _run_fallback_in_thread(batch_id, delay_err=None):
-            '''在 daemon 线程里跑同步兜底，HTTP 立即返回，前端通过轮询看进度。
-            '''
-            import threading
-            from django.db import close_old_connections
-
-            def _worker():
-                close_old_connections()
-                logger.warning(f'[JudgeBatch#{batch_id}] 后台线程执行批量评分: {delay_err}')
-                orig_fn = score_batch_task.__wrapped__.__func__
-                class R: id = f'SYNC{batch_id}'
-                class FakeS:
-                    request = R()
-                    def update_state(self, **kw): pass
-                try:
-                    orig_fn(FakeS(), batch_id)
-                except Exception as sync_exc:
-                    logger.exception(f'[JudgeBatch#{batch_id}] 后台线程执行失败')
-                    JudgeBatch.objects.filter(pk=batch_id).update(
-                        status='failed',
-                        error_message=f'后台执行失败: {sync_exc}',
-                        completed_at=timezone.now(),
-                        is_paused=False,
-                    )
-                finally:
-                    close_old_connections()
-
-            t = threading.Thread(target=_worker, daemon=True, name=f'judge-batch-{batch_id}')
-            t.start()
-
-        if _broker_reachable(timeout=2.0):
-            # apply_async(retry=False)：不做 producer 级重试；立即失败就走 fallback
-            try:
-                async_result = score_batch_task.apply_async(
-                    (batch.id,), retry=False, ignore_result=False,
-                )
-                batch.celery_task_id = async_result.id or ''
-                batch.status = 'running'
-                batch.save(update_fields=['celery_task_id', 'status'])
-            except Exception as delay_exc:
-                sync_fallback_msg = f'Celery 投递失败已切换后台执行: {delay_exc}'
-                _run_fallback_in_thread(batch.id, delay_err=str(delay_exc))
-        else:
-            sync_fallback_msg = 'Celery broker 不可达，已切换后台执行'
-            _run_fallback_in_thread(batch.id, delay_err='broker_unreachable')
-
-        if sync_fallback_msg:
-            JudgeBatch.objects.filter(pk=batch.id).update(error_message=sync_fallback_msg)
-            batch.error_message = sync_fallback_msg
+        from apps.core.task_queue import enqueue_task
+        try:
+            task_id = enqueue_task(score_batch_task, batch.id)
+            batch.celery_task_id = task_id or ''
+            batch.save(update_fields=['celery_task_id'])
+        except Exception as queue_err:
+            batch.status = 'failed'
+            batch.error_message = f'任务投递失败: {queue_err}'
+            batch.completed_at = timezone.now()
+            batch.save(update_fields=['status', 'error_message', 'completed_at'])
 
         return Response(JudgeBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
 
@@ -242,13 +181,6 @@ class JudgeBatchViewSet(viewsets.ModelViewSet):
                 return Response({'error': f'status {batch.status} cannot be paused'}, status=status.HTTP_400_BAD_REQUEST)
             if batch.is_paused or batch.status == 'paused':
                 return Response(JudgeBatchSerializer(batch).data)
-            # best-effort celery revoke (non-terminate)
-            if batch.celery_task_id:
-                try:
-                    from .tasks import score_batch_task as _t
-                    _t.AsyncResult(batch.celery_task_id).revoke(terminate=False)
-                except Exception:
-                    pass
             rows = JudgeBatch.objects.filter(
                 pk=batch.id,
                 status__in=('pending', 'running', 'partial'),
@@ -263,8 +195,8 @@ class JudgeBatchViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='resume')
     def resume(self, request, pk=None):
-        '''Resume: set status=running + is_paused=False; re-dispatch Celery task.
-        Allowed from paused/partial/failed/pending; worker continues from scored index.
+        '''Resume: set status=running + is_paused=False; re-dispatch a Django-Q2 task.
+        Allowed from paused/partial/failed/pending; queue worker continues from scored index.
         '''
         from django.db import transaction
         with transaction.atomic():
@@ -290,60 +222,15 @@ class JudgeBatchViewSet(viewsets.ModelViewSet):
                     JudgeBatch.objects.filter(pk=batch.id).update(started_at=timezone.now())
                     batch.refresh_from_db()
                 from .tasks import score_batch_task
-                from celery import current_app as _celery_app
-                import threading as _th
-                from django.db import close_old_connections as _close_old_conn
-
-                def _resume_fallback_thread(batch_id, delay_err=None):
-                    '''在 daemon 线程里续跑，HTTP 立即返回，前端轮询看进度。
-                    '''
-                    def _worker():
-                        _close_old_conn()
-                        logger.warning(f'[JudgeBatch#{batch_id}] resume: 后台线程续跑: {delay_err}')
-                        orig_fn = score_batch_task.__wrapped__.__func__
-                        class R: id = f'SYNC{batch_id}'
-                        class FakeS:
-                            request = R()
-                            def update_state(self, **kw): pass
-                        try:
-                            orig_fn(FakeS(), batch_id)
-                        except Exception as sync_exc:
-                            logger.exception(f'[JudgeBatch#{batch_id}] resume: 后台续跑失败')
-                            JudgeBatch.objects.filter(pk=batch_id).update(
-                                status='failed',
-                                error_message=f'后台续跑失败: {sync_exc}',
-                                completed_at=timezone.now(),
-                                is_paused=False,
-                            )
-                        finally:
-                            _close_old_conn()
-                    _th.Thread(target=_worker, daemon=True, name=f'judge-resume-{batch_id}').start()
-
-                def _broker_reachable(timeout: float = 2.0) -> bool:
-                    try:
-                        from kombu import Connection as _KombuConn
-                        url = getattr(_celery_app.conf, 'broker_url', None) or getattr(_celery_app.connection(), 'as_uri', lambda: '')()
-                        if not url or url.startswith('memory') or url.startswith('sqla'):
-                            return True
-                        transport_options = {'connect_timeout': timeout, 'socket_timeout': timeout,
-                                             'socket_connect_timeout': timeout,
-                                             'retry_on_timeout': False, 'max_retries': 0}
-                        with _KombuConn(url, connect_timeout=timeout, transport_options=transport_options) as conn:
-                            conn.ensure_connection(max_retries=0, timeout=timeout)
-                        return True
-                    except Exception:
-                        return False
-
-                if _broker_reachable(timeout=2.0):
-                    try:
-                        async_result = score_batch_task.apply_async((batch.id,), retry=False)
-                        JudgeBatch.objects.filter(pk=batch.id).update(celery_task_id=async_result.id or '')
-                    except Exception as delay_exc:
-                        JudgeBatch.objects.filter(pk=batch.id).update(error_message=f'resume: 投递失败已切换后台: {delay_exc}')
-                        _resume_fallback_thread(batch.id, delay_err=str(delay_exc))
-                else:
-                    JudgeBatch.objects.filter(pk=batch.id).update(error_message='resume: broker 不可达，已切换后台续跑')
-                    _resume_fallback_thread(batch.id, delay_err='broker_unreachable')
+                from apps.core.task_queue import enqueue_task
+                try:
+                    task_id = enqueue_task(score_batch_task, batch.id)
+                    JudgeBatch.objects.filter(pk=batch.id).update(celery_task_id=task_id or '')
+                except Exception as queue_err:
+                    JudgeBatch.objects.filter(pk=batch.id).update(
+                        status='failed', error_message=f'resume: 任务投递失败: {queue_err}',
+                        completed_at=timezone.now(), is_paused=False,
+                    )
         return Response(JudgeBatchSerializer(batch).data)
 
 

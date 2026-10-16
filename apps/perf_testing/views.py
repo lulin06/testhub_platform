@@ -1489,6 +1489,7 @@ class PerfComparisonReportViewSet(viewsets.ViewSet):
 
         if request.data.get('ai_analyze'):
             from .tasks import comparison_ai_analysis_task
-            comparison_ai_analysis_task.delay(report.id)
+            from apps.core.task_queue import enqueue_task
+            enqueue_task(comparison_ai_analysis_task, report.id)
 
         return Response(self._brief(report), status=status.HTTP_201_CREATED)

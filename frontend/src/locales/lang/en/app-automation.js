@@ -498,7 +498,7 @@ export default {
     submitted: 'Test submitted for execution',
     executionFailed: 'Execution failed: {message}',
     unknownError: 'Unknown error',
-    taskNotStarted: 'Task not started, please confirm Celery worker/Redis is running',
+    taskNotStarted: 'Task not started, please confirm the Django-Q2 worker is running',
     deleteConfirm: 'Are you sure you want to delete test case "{name}"?',
     deleteFailedMsg: 'Delete failed: {message}',
     executionPassed: 'Test execution passed',

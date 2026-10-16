@@ -1,18 +1,19 @@
-from celery import shared_task
 from django.utils import timezone
 
 from .models import TestCaseImportRecord
 from .services import TestCaseExcelImportService
 
 
-@shared_task(bind=True)
-def import_testcases_from_excel(self, record_id: int):
+def import_testcases_from_excel(record_id: int, task_id: str = ''):
     record = TestCaseImportRecord.objects.get(id=record_id)
     record.status = 'importing'
     record.progress = 5
-    record.celery_task_id = self.request.id or ''
     record.error_message = ''
-    record.save(update_fields=['status', 'progress', 'celery_task_id', 'error_message', 'updated_at'])
+    update_fields = ['status', 'progress', 'error_message', 'updated_at']
+    if task_id:
+        record.celery_task_id = task_id
+        update_fields.append('celery_task_id')
+    record.save(update_fields=update_fields)
 
     try:
         summary = TestCaseExcelImportService.import_record(record)

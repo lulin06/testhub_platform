@@ -21,9 +21,8 @@ CHANNEL_LAYERS = {
     },
 }
 
-# 测试时关闭 Celery eager 模式（同步执行）
-CELERY_TASK_ALWAYS_EAGER = True
-CELERY_TASK_EAGER_PROPAGATES = True
+# Django-Q2 test configuration. Task functions can be called directly in tests.
+Q_CLUSTER = {**Q_CLUSTER, 'workers': 1, 'orm': 'default'}
 
 # 缓存使用本地内存
 CACHES = {

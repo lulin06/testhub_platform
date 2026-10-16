@@ -52,7 +52,7 @@ TestHub is an AI-powered, full-stack test management platform that supports the 
 - Use Airtest image recognition with local emulators or remote devices; device locking helps avoid resource conflicts.
 - Manage image, coordinate, and region-based elements with multi-resolution support.
 - Build reusable components and UI Flow workflows, with global, local, and output variables.
-- Execute tasks asynchronously with Celery, generate Allure reports, and track progress over WebSocket.
+- Execute tasks asynchronously with Django-Q2, generate Allure reports, and track progress over WebSocket.
 
 ### Performance testing
 
@@ -73,11 +73,11 @@ TestHub is an AI-powered, full-stack test management platform that supports the 
 
 ### Backend
 
-- Django 4.2 and Django REST Framework
+- Django 6.0 and Django REST Framework
 - MySQL 8.0+
 - JWT authentication with `rest_framework_simplejwt` and token blacklisting
 - Selenium, Playwright, Airtest, OCR, and Allure
-- Celery, APScheduler, Channels, and Daphne for asynchronous work and WebSockets
+- Django-Q2, APScheduler, Channels, and Daphne for asynchronous work and WebSockets
 - `browser-use`, `langchain-openai`, and multiple AI model providers
 - `drf-spectacular` for Swagger and ReDoc API documentation
 
@@ -127,7 +127,7 @@ testhub_platform/
 - **Node.js:** 18+ for frontend builds; not required on production servers serving prebuilt assets.
 - **MySQL:** 8.0+
 - **Java:** 17+ (optional; required to generate Allure reports).
-- **Redis:** 6.0+ (optional; required for app automation WebSockets and Celery).
+- **Redis:** 6.0+ (optional; required for app automation WebSockets).
 - **Browser drivers:** ChromeDriver or GeckoDriver for UI automation; these can also be downloaded with a management command.
 
 ### Backend setup
@@ -191,8 +191,8 @@ testhub_platform/
    # Optional: API/UI scheduled task scheduler
    python manage.py run_all_scheduled_tasks
 
-   # Optional: Celery worker for asynchronous APP automation
-   celery -A backend worker -l info
+   # Django-Q2 worker for asynchronous tasks
+   python manage.py qcluster
    ```
 
 ### Frontend setup
@@ -215,7 +215,7 @@ npm run build      # Production build
 
 From the repository root, copy `.env.example` to `.env` and set at least
 `SECRET_KEY`, `DB_PASSWORD`, and the allowed hosts/origins for the address where
-the application will be accessed. The Docker image runs Nginx, Daphne, Celery,
+the application will be accessed. The Docker image runs Nginx, Daphne, Django-Q2,
 the scheduler, MySQL, and Redis in one container:
 
 ```bash
@@ -234,7 +234,7 @@ setting `DOCKER_REGISTRY`, `DOCKER_NAMESPACE`, and `IMAGE_VERSION`.
 Configure environment variables in `.env` (see `.env.example`). Common settings include:
 
 - **Database:** `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, and `DB_PORT`.
-- **Redis:** `REDIS_URL` for APP automation WebSockets and Celery.
+- **Redis:** `REDIS_URL` for APP automation WebSockets.
 - **AI models:** Configure API keys, base URLs, and model parameters for multiple providers in the unified configuration center. Settings can be assigned to roles such as test case writer, reviewer, and Browser Use, with connection testing available.
 - **UI automation:** Select the Selenium or Playwright engine, browser, and headed or headless mode.
 - **Notifications:** Configure SMTP email and WeCom, DingTalk, or Feishu webhook bots.

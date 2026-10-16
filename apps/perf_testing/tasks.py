@@ -1,18 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-perf_testing Celery 任务。
+perf_testing Django-Q2 任务。
 
 AI 分析任务：异步执行 LLM 调用，结果缓存到 Redis，通过 channel_layer 推送进度。
 """
 
 import logging
-from celery import shared_task
-
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, ignore_result=True)
-def analyze_perf_execution_task(self, execution_id):
+def analyze_perf_execution_task(execution_id):
     """
     异步执行压测 AI 分析。
 
@@ -61,8 +58,7 @@ def analyze_perf_execution_task(self, execution_id):
         cache.set(cache_key, json.dumps({'error': str(e)}, ensure_ascii=False), timeout=1800)
 
 
-@shared_task(bind=True, ignore_result=True)
-def comparison_ai_analysis_task(self, report_id):
+def comparison_ai_analysis_task(report_id):
     """多轮对照报告 AI 分析：压缩快照 → LLM 对照分析 → 写回 ai_analysis。"""
     import asyncio
     from apps.perf_testing.models import PerfComparisonReport

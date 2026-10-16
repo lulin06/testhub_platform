@@ -1,13 +1,12 @@
-"""智能评分器 Celery 任务：批量评分异步执行 + 进度回写 + 暂停续跑。
+"""智能评分器 Django-Q2 任务：批量评分异步执行 + 进度回写 + 暂停续跑。
 
-对齐 apps/testcases/tasks.py 的写法（@shared_task(bind=True) + 状态字段回写）。
+任务通过 Django-Q2 入队，状态字段持续回写数据库。
 暂停/续跑由 JudgeBatch.is_paused / JudgeBatch.status 控制位驱动：
 - 用户点暂停：ViewSet.pause() 更新 is_paused=True, status='paused'；本任务每条循环前检测到即中断。
-- 用户点继续：ViewSet.resume() 把 paused/partial/failed/pending → running，并再次调 .delay()；
+- 用户点继续：ViewSet.resume() 把 paused/partial/failed/pending → running，并再次入队；
   本任务进入后从 batch.scored 位置继续，已评结果存在 batch.results_buffer / batch.error_count。
 """
 import logging
-from celery import shared_task
 from django.utils import timezone
 
 from .models import JudgeBatch
@@ -15,8 +14,7 @@ from .models import JudgeBatch
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True)
-def score_batch_task(self, batch_id: int):
+def score_batch_task(batch_id: int, task_id: str = ''):
     """批量评分：循环调 JudgeService.score_single()，支持暂停续跑。
 
     JudgeRecord 的具体落库由 JudgeService.score_single() 内部完成（含 batch 外键），
@@ -32,11 +30,11 @@ def score_batch_task(self, batch_id: int):
     if batch.status != 'running':
         batch.status = 'running'
     batch.is_paused = False
-    try:
-        batch.celery_task_id = self.request.id or ''
-    except Exception:
-        pass
-    batch.save(update_fields=['status', 'celery_task_id', 'started_at', 'is_paused'])
+    update_fields = ['status', 'started_at', 'is_paused']
+    if task_id:
+        batch.celery_task_id = task_id
+        update_fields.append('celery_task_id')
+    batch.save(update_fields=update_fields)
 
     try:
         service = JudgeService()
@@ -87,13 +85,6 @@ def score_batch_task(self, batch_id: int):
                     status='paused',
                     is_paused=True,
                 )
-                try:
-                    self.update_state(state='PAUSED', meta={
-                        'current': len(results), 'total': total,
-                        'progress': int(len(results) / max(1, total) * 100),
-                    })
-                except Exception:
-                    pass
                 return {
                     'batch_id': batch.id,
                     'status': 'paused',
@@ -126,12 +117,6 @@ def score_batch_task(self, batch_id: int):
                 batch.error_count = error_cnt
                 update_fields.extend(['results_buffer', 'error_count'])
             batch.save(update_fields=update_fields)
-            try:
-                self.update_state(state='PROGRESS', meta={
-                    'current': scored_now, 'total': total, 'progress': progress_now,
-                })
-            except Exception:
-                pass
 
         # ---- 3. 最终汇总与 status ----
         try:

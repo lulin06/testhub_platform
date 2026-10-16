@@ -77,13 +77,14 @@ class AppTestCaseViewSet(viewsets.ModelViewSet):
                 status='pending'
             )
             
-            # 调用 Celery 任务异步执行
+            # 调用 Django-Q2 任务异步执行
             from ..tasks import execute_app_test_task
-            task = execute_app_test_task.delay(execution.id, package_name=package_name)
-            execution.task_id = task.id
+            from apps.core.task_queue import enqueue_task
+            task_id = enqueue_task(execute_app_test_task, execution.id, package_name=package_name)
+            execution.task_id = task_id
             execution.save()
             
-            logger.info(f"测试已提交执行: execution_id={execution.id}, task_id={task.id}")
+            logger.info(f"测试已提交执行: execution_id={execution.id}, task_id={task_id}")
             
             return Response({
                 'success': True,

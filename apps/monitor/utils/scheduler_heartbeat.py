@@ -14,7 +14,7 @@ ONLINE_THRESHOLD = 90   # 最后心跳距现在 <= 此值视为在线（秒）
 
 
 def _client():
-    url = getattr(settings, 'CELERY_BROKER_URL', None) or getattr(settings, 'REDIS_URL', None)
+    url = getattr(settings, 'REDIS_URL', None)
     if not url:
         return None
     try:

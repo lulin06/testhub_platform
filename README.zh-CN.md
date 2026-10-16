@@ -52,7 +52,7 @@ TestHub 是一个 AI 驱动的全栈测试管理平台，覆盖测试全流程�
 - 基于 Airtest 图像识别，支持本地模拟器与远程设备，设备锁定避免资源冲突
 - 元素管理（图片 / 坐标 / 区域）与多分辨率适配
 - 组件化编排 + UI Flow 流程编排，变量管理（global / local / outputs）
-- Celery 异步执行 + Allure 报告，WebSocket 实时进度追踪
+- Django-Q2 异步执行 + Allure 报告，WebSocket 实时进度追踪
 
 ### 🚀 性能测试
 
@@ -73,11 +73,11 @@ TestHub 是一个 AI 驱动的全栈测试管理平台，覆盖测试全流程�
 
 ### 后端
 
-- **框架**: Django 4.2 + Django REST Framework
+- **框架**: Django 6.0 + Django REST Framework
 - **数据库**: MySQL 8.0+
 - **认证**: JWT（rest_framework_simplejwt）+ Token 黑名单
 - **自动化**: Selenium、Playwright、Airtest + OCR、Allure
-- **异步与任务**: Celery、APScheduler、Channels + Daphne（WebSocket）
+- **异步与任务**: Django-Q2、APScheduler、Channels + Daphne（WebSocket）
 - **AI 集成**: browser-use、langchain-openai，多模型提供商
 - **API 文档**: drf-spectacular（Swagger / ReDoc）
 
@@ -128,7 +128,7 @@ testhub_platform/
 - **Node.js**: 18+（前端构建必需，生产环境可不安装）
 - **MySQL**: 8.0+
 - **Java**: 17+（可选，Allure 报告生成需要）
-- **Redis**: 6.0+（可选，APP 自动化 WebSocket / Celery 需要）
+- **Redis**: 6.0+（可选，APP 自动化 WebSocket 需要）
 - **浏览器驱动**: ChromeDriver / GeckoDriver（UI 自动化，也可通过管理命令自动下载）
 
 ### 后端部署
@@ -192,8 +192,8 @@ daphne -b 0.0.0.0 -p 8000 backend.asgi:application
 # 定时任务调度器（API / UI 定时任务，可选）
 python manage.py run_all_scheduled_tasks
 
-# Celery worker（APP 自动化异步任务，可选）
-celery -A backend worker -l info
+# Django-Q2 worker（异步任务）
+python manage.py qcluster
 ```
 
 ### 前端部署
@@ -216,7 +216,7 @@ npm run build      # 生产构建
 
 在项目根目录将 `.env.example` 复制为 `.env`，至少配置
 `SECRET_KEY`、`DB_PASSWORD`，并按实际访问地址配置允许的主机和来源。
-Docker 镜像会在同一个容器内运行 Nginx、Daphne、Celery、调度器、MySQL 和
+Docker 镜像会在同一个容器内运行 Nginx、Daphne、Django-Q2、调度器、MySQL 和
 Redis：
 
 ```bash
@@ -235,7 +235,7 @@ docker compose --env-file .env -f docker/docker-compose.yml exec testhub python 
 环境变量统一在 `.env` 中配置（参考 `.env.example`），主要包括：
 
 - **数据库**: `DB_NAME`、`DB_USER`、`DB_PASSWORD`、`DB_HOST`、`DB_PORT`
-- **Redis**: `REDIS_URL`（APP 自动化 WebSocket / Celery 需要）
+- **Redis**: `REDIS_URL`（APP 自动化 WebSocket 需要）
 - **AI 模型**: 在「统一配置中心」管理多家提供商的 API Key / Base URL / 模型参数，支持按角色配置（用例编写、用例评审、Browser Use），并提供连接测试
 - **UI 自动化**: 执行引擎（Selenium / Playwright）、浏览器、有头 / 无头模式
 - **通知**: 邮件（SMTP）与 Webhook 机器人（企业微信 / 钉钉 / 飞书）
