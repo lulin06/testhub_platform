@@ -2,6 +2,8 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 import json
+from apps.projects.models import Project
+from apps.projects.managers import ActiveProjectManager
 
 User = get_user_model()
 
@@ -24,6 +26,18 @@ class UiProject(models.Model):
     members = models.ManyToManyField(User, blank=True, related_name='ui_projects', verbose_name='团队成员')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+    workspace_project = models.OneToOneField(
+        Project, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='ui_project', verbose_name='统一项目'
+    )
+    is_deleted = models.BooleanField(default=False, verbose_name='是否删除')
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name='删除时间')
+    deleted_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='deleted_ui_projects', verbose_name='删除人'
+    )
+    objects = ActiveProjectManager()
+    all_objects = models.Manager()
 
     class Meta:
         db_table = 'ui_projects'

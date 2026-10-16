@@ -36,6 +36,7 @@ from .models import (PerfBaseline, PerfComparisonReport, PerfDataFile, PerfExecu
                      PerfMetricSample, PerfProject, PerfRequestStat, PerfScenario,
                      PerfScenarioStep, PerfScheduledTask)
 from .operation_logger import log_operation
+from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 from .serializers import (PerfBaselineSerializer, PerfDataFileSerializer,
                           PerfExecutionDetailSerializer, PerfExecutionListSerializer,
                           PerfMetricSampleSerializer, PerfProjectSerializer,
@@ -145,17 +146,20 @@ class PerfProjectViewSet(viewsets.ModelViewSet):
         # 注解场景/执行计数，避免序列化器逐项目 count() 的 N+1。
         # 两个 Count 必须 distinct，否则 JOIN 会产生笛卡尔积放大。
         from django.db.models import Count
-        return super().get_queryset().annotate(
+        return super().get_queryset().filter(is_deleted=False).annotate(
             scenario_count_anno=Count('scenarios', distinct=True),
             execution_count_anno=Count('executions', distinct=True),
         )
 
     def perform_create(self, serializer):
         project = serializer.save()
+        ensure_workspace_project_for_module(project, 'perf', self.request.user)
         log_operation('CREATE', 'PROJECT', project.id, project.name, self.request.user)
 
     def perform_update(self, serializer):
         project = serializer.save()
+        sync_project_members_from_module(project)
+        sync_workspace_project_from_module(project, 'perf')
         log_operation('UPDATE', 'PROJECT', project.id, project.name, self.request.user)
 
     def perform_destroy(self, instance):
@@ -165,7 +169,7 @@ class PerfProjectViewSet(viewsets.ModelViewSet):
         if running:
             raise ValidationError(f'项目下还有 {running} 个压测正在执行，请先停止后再删除')
         log_operation('DELETE', 'PROJECT', instance.id, instance.name, self.request.user)
-        instance.delete()
+        soft_delete_module_project(instance, self.request.user)
 
     @action(detail=True, methods=['get'])
     def statistics(self, request, pk=None):

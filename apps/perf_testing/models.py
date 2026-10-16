@@ -11,6 +11,8 @@ from django.db import models
 from django.utils import timezone
 
 User = get_user_model()
+from apps.projects.models import Project
+from apps.projects.managers import ActiveProjectManager
 
 
 class PerfProject(models.Model):
@@ -33,6 +35,18 @@ class PerfProject(models.Model):
     members = models.ManyToManyField(User, blank=True, related_name='perf_projects', verbose_name='团队成员')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间', db_comment='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间', db_comment='更新时间')
+    workspace_project = models.OneToOneField(
+        Project, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='perf_project', verbose_name='统一项目'
+    )
+    is_deleted = models.BooleanField(default=False, verbose_name='是否删除', db_comment='是否删除')
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name='删除时间', db_comment='删除时间')
+    deleted_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='deleted_perf_projects', verbose_name='删除人', db_comment='删除人'
+    )
+    objects = ActiveProjectManager()
+    all_objects = models.Manager()
 
     class Meta:
         db_table_comment = '压测项目'

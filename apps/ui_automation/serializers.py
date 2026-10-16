@@ -26,7 +26,7 @@ class UiProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = UiProject
         fields = '__all__'
-        read_only_fields = ('created_at', 'updated_at')
+        read_only_fields = ('created_at', 'updated_at', 'workspace_project', 'is_deleted', 'deleted_at', 'deleted_by')
 
 
 class UiProjectCreateSerializer(serializers.ModelSerializer):

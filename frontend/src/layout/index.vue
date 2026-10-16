@@ -237,6 +237,10 @@
 
           <!-- 配置中心模块菜单 -->
           <template v-else-if="currentModule === 'configuration'">
+            <el-menu-item index="/configuration/projects">
+              <el-icon><FolderOpened /></el-icon>
+              <span>项目管理</span>
+            </el-menu-item>
             <el-sub-menu index="ai-case-generation">
               <template #title>
                 <el-icon><MagicStick /></el-icon>
@@ -575,6 +579,7 @@ const breadcrumbTitle = computed(() => {
 
     // 配置中心
     '/configuration/ai-model': t('menu.aiModelConfig'),
+    '/configuration/projects': t('menu.projectManagement'),
     '/configuration/prompt-config': t('menu.promptConfig'),
     '/configuration/generation-config': t('menu.generationConfig'),
     '/configuration/ui-env': t('menu.uiEnvConfig'),
