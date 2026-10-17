@@ -202,6 +202,8 @@ export default {
     createPageTitle: 'Create Page',
     editPageTitle: 'Edit Page',
     addElement: 'Add Element',
+    copyElement: 'Copy Element',
+    deleteElement: 'Delete Element',
     pageName: 'Page Name',
     pageNamePlaceholder: 'Please enter page name',
     parentPage: 'Parent Page',
@@ -284,6 +286,10 @@ export default {
       deleteConfirmTitle: 'Confirm Delete',
       deleteSuccess: 'Element deleted successfully',
       deleteFailed: 'Failed to delete',
+      copySuccess: 'Element copied successfully',
+      copyFailed: 'Failed to copy element',
+      orderSaveSuccess: 'Element order saved successfully',
+      orderSaveFailed: 'Failed to save element order',
       pageCreateSuccess: 'Page created successfully',
       pageCreateFailed: 'Failed to create page',
       pageUpdateSuccess: 'Page updated successfully',
@@ -1110,10 +1116,14 @@ export default {
     actionAssert: 'Assert',
     actionWait: 'Wait',
     actionSwitchTab: 'Switch Tab',
+    actionNavigate: 'Navigate URL',
+    selectPage: 'Select Page',
+    allPages: 'All Pages',
     selectElement: 'Select Element',
     inputValue: 'Input Value:',
     inputPlaceholder: 'Enter content, supports variables like \'{random_phone()}\'',
     switchTabPlaceholder: 'Enter index (0,1...) or leave empty for latest',
+    navigatePlaceholder: 'Enter a full URL, e.g. https://example.com',
     insertVariable: 'Insert Dynamic Variable',
     referenceDataFactory: 'Reference Data Factory',
     waitTime: 'Wait Time (ms):',
@@ -1123,6 +1133,7 @@ export default {
     assertIsVisible: 'Element Visible',
     assertExists: 'Element Exists',
     assertHasAttribute: 'Attribute Value',
+    assertUrlContains: 'URL Contains',
     expectedValue: 'Expected Value',
     stepDescription: 'Step Description:',
     stepDescPlaceholder: 'Describe the purpose of this step',
@@ -1228,7 +1239,8 @@ export default {
       scroll: 'Scroll',
       screenshot: 'Screenshot',
       assert: 'Assert',
-      wait: 'Wait'
+      wait: 'Wait',
+      navigate: 'Navigate URL'
     },
     // Action text (for displaying action descriptions in execution logs)
     actionText: {
@@ -1240,7 +1252,8 @@ export default {
       scroll: 'Scroll',
       screenshot: 'Screenshot',
       assert: 'Assert',
-      wait: 'Wait'
+      wait: 'Wait',
+      navigate: 'Navigate URL'
     },
     // Status text
     status: {
@@ -1292,7 +1305,8 @@ export default {
     scroll: 'Scroll',
     screenshot: 'Screenshot',
     assert: 'Assert',
-    wait: 'Wait'
+    wait: 'Wait',
+    navigate: 'Navigate URL'
   },
 
   // Messages

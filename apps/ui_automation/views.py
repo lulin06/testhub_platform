@@ -1,12 +1,12 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import filters
 from django.db import models
 from django.utils import timezone
 import logging
@@ -40,7 +40,8 @@ from .serializers import (
     TestCaseSerializer, TestCaseStepSerializer, TestCaseExecutionSerializer, TestCaseRunSerializer,
     OperationRecordSerializer,
     UiScheduledTaskSerializer, UiNotificationLogSerializer, UiTaskNotificationSettingSerializer,
-    AICaseSerializer, AIExecutionRecordSerializer
+    AICaseSerializer, AIExecutionRecordSerializer,
+    validate_test_case_step_data,
 )
 from .operation_logger import log_operation
 from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
@@ -325,6 +326,7 @@ class ElementViewSet(viewsets.ModelViewSet):
                 'locator_value': element.locator_value,
                 'validation_status': element.validation_status,
                 'usage_count': element.usage_count,
+                'order': element.order,
                 'group_id': element.group_id,  # 用于前端关联到页面
                 'page': element.page,  # 保留向后兼容
                 'children': []
@@ -929,8 +931,46 @@ class TestCaseViewSet(viewsets.ModelViewSet):
         ).distinct()
         return TestCase.objects.filter(project__in=accessible_projects).select_related('project', 'created_by')
 
+    def _validate_steps(self, steps_data, project_id):
+        """校验测试用例提交的步骤，并复用步骤序列化器的业务规则。"""
+        valid_actions = {value for value, _ in TestCaseStep.ACTION_TYPE_CHOICES}
+        valid_assert_types = {value for value, _ in TestCaseStep.ASSERT_TYPE_CHOICES}
+
+        for index, raw_step in enumerate(steps_data or [], 1):
+            step = dict(raw_step)
+            action_type = step.get('action_type', 'click')
+            assert_type = step.get('assert_type', '')
+            element_id = step.get('element_id', step.get('element'))
+
+            if action_type not in valid_actions:
+                raise ValidationError({'steps': [f'步骤{index}的操作类型无效: {action_type}']})
+            if assert_type and assert_type not in valid_assert_types:
+                raise ValidationError({'steps': [f'步骤{index}的断言类型无效: {assert_type}']})
+
+            element = None
+            if element_id:
+                element = Element.objects.filter(id=element_id, project_id=project_id).first()
+                if not element:
+                    raise ValidationError({'steps': [f'步骤{index}的目标元素不属于当前项目']})
+
+            try:
+                validate_test_case_step_data(
+                    action_type=action_type,
+                    assert_type=assert_type,
+                    input_value=step.get('input_value', ''),
+                    assert_value=step.get('assert_value', ''),
+                    element=element,
+                    project_id=project_id,
+                )
+            except ValidationError as exc:
+                detail = exc.detail
+                if isinstance(detail, list):
+                    detail = detail[0]
+                raise ValidationError({'steps': [f'步骤{index}{detail}']}) from exc
+
     def perform_create(self, serializer):
         # 创建测试用例
+        self._validate_steps(self.request.data.get('steps', []), self.request.data.get('project'))
         instance = serializer.save(created_by=self.request.user)
 
         # 记录操作
@@ -940,7 +980,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
         steps_data = self.request.data.get('steps', [])
         logger.info(f"创建测试用例 {instance.id} 的步骤数据: {len(steps_data)} 个步骤")
 
-        if steps_data:
+        if 'steps' in self.request.data:
             # 创建新步骤
             created_count = 0
             for i, step_data in enumerate(steps_data):
@@ -1027,6 +1067,8 @@ class TestCaseViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         # 更新测试用例步骤
+        project_id = self.request.data.get('project', serializer.instance.project_id)
+        self._validate_steps(self.request.data.get('steps', []), project_id)
         instance = serializer.save()
 
         # 记录操作
@@ -1036,7 +1078,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
         steps_data = self.request.data.get('steps', [])
         logger.info(f"更新测试用例 {instance.id} 的步骤数据: {len(steps_data)} 个步骤")
 
-        if steps_data:
+        if 'steps' in self.request.data:
             # 删除现有步骤
             existing_steps_count = instance.steps.count()
             instance.steps.all().delete()

@@ -31,10 +31,14 @@
             node-key="id"
             :expand-on-click-node="false"
             :default-expanded-keys="expandedKeys"
+            draggable
+            :allow-drag="allowTreeDrag"
+            :allow-drop="allowTreeDrop"
             @node-click="onNodeClick"
             @node-contextmenu="onNodeRightClick"
             @node-expand="onNodeExpand"
             @node-collapse="onNodeCollapse"
+            @node-drop="onNodeDrop"
           >
             <template #default="{ node, data }">
               <div class="tree-node">
@@ -62,6 +66,14 @@
 
                 <span v-if="data.type === 'element'" class="element-type-tag" :class="data.element_type?.toLowerCase()">
                   {{ getElementTypeLabel(data.element_type) }}
+                </span>
+                <span v-if="data.type === 'element'" class="node-actions">
+                  <el-button text size="small" @click.stop="copyElementNode(data)" :title="$t('uiAutomation.element.copyElement')">
+                    <el-icon><DocumentCopy /></el-icon>
+                  </el-button>
+                  <el-button text size="small" type="danger" @click.stop="deleteElementNode(data)" :title="$t('uiAutomation.element.deleteElement')">
+                    <el-icon><Delete /></el-icon>
+                  </el-button>
                 </span>
               </div>
             </template>
@@ -847,6 +859,112 @@ const onNodeClick = async (data) => {
   }
 }
 
+const allowTreeDrag = (node) => node.data?.type === 'element'
+
+const allowTreeDrop = (draggingNode, dropNode, dropType) => {
+  if (dropNode.data?.type === 'page') return dropType === 'inner'
+  return dropNode.data?.type === 'element' && ['before', 'after'].includes(dropType)
+}
+
+const getPageNodeForElement = (node) => {
+  let current = node
+  while (current && current.data?.type !== 'page') current = current.parent
+  return current?.data?.type === 'page' ? current.data : null
+}
+
+const saveTreeElementOrders = async () => {
+  const updates = []
+  const collect = (nodes) => {
+    nodes.forEach(page => {
+      if (page.type !== 'page') return
+      page.children
+        ?.filter(child => child.type === 'element')
+        .forEach((element, index) => {
+          const targetGroupId = page.id === 'unassigned' ? null : page.id
+          const targetPage = page.id === 'unassigned' ? '' : page.name
+          if (element.order !== index || element.group_id !== targetGroupId || element.page !== targetPage) {
+            updates.push(updateElement(element.id, {
+              order: index,
+              group_id: targetGroupId,
+              page: targetPage,
+              project_id: selectedProject.value
+            }))
+          }
+        })
+      collect(page.children?.filter(child => child.type === 'page') || [])
+    })
+  }
+
+  collect(treeData.value)
+  await Promise.all(updates)
+}
+
+const onNodeDrop = async (draggingNode, dropNode) => {
+  const targetPage = getPageNodeForElement(dropNode)
+  if (!targetPage) return
+
+  try {
+    await saveTreeElementOrders()
+    ElMessage.success(t('uiAutomation.element.messages.orderSaveSuccess'))
+    await loadElementTree()
+    treeKey.value += 1
+  } catch (error) {
+    console.error('保存元素排序失败:', error)
+    ElMessage.error(t('uiAutomation.element.messages.orderSaveFailed'))
+    await loadElementTree()
+    treeKey.value += 1
+  }
+}
+
+const getCopyName = (name) => {
+  const baseName = `${name || t('uiAutomation.element.elementName')}_copy`
+  const names = new Set()
+  const collect = (nodes) => nodes.forEach(node => {
+    if (node.type === 'element') names.add(node.name)
+    if (node.children) collect(node.children)
+  })
+  collect(treeData.value)
+  if (!names.has(baseName)) return baseName
+  let index = 2
+  while (names.has(`${baseName}_${index}`)) index += 1
+  return `${baseName}_${index}`
+}
+
+const copyElementNode = async (node) => {
+  try {
+    const response = await getElementDetail(node.id)
+    const source = response.data
+    await createElement({
+      project_id: selectedProject.value,
+      group_id: node.group_id || null,
+      name: getCopyName(source.name),
+      page: source.page || node.page || '',
+      component_name: source.component_name || '',
+      description: source.description || '',
+      element_type: source.element_type || 'BUTTON',
+      locator_strategy_id: source.locator_strategy_id || source.locator_strategy?.id,
+      locator_value: source.locator_value || '',
+      wait_timeout: source.wait_timeout || 5,
+      force_action: Boolean(source.force_action),
+      is_unique: Boolean(source.is_unique),
+      is_visible: source.is_visible !== false,
+      is_enabled: source.is_enabled !== false,
+      order: (source.order || 0) + 1
+    })
+    ElMessage.success(t('uiAutomation.element.messages.copySuccess'))
+    await loadElementTree()
+    treeKey.value += 1
+  } catch (error) {
+    console.error('复制元素失败:', error)
+    ElMessage.error(t('uiAutomation.element.messages.copyFailed'))
+  }
+}
+
+const deleteElementNode = async (node) => {
+  rightClickedNode.value = node
+  await deleteNode()
+}
+
 // 节点右键点击
 const onNodeRightClick = (event, data) => {
   console.log('Node right click event:', event, 'Data:', data)
@@ -1385,6 +1503,21 @@ const updatePage = async () => {
   border-radius: 4px;
   background-color: #ecf5ff;
   color: #409eff;
+}
+
+.node-actions {
+  display: none;
+  align-items: center;
+  margin-left: auto;
+}
+
+.tree-node:hover .node-actions {
+  display: inline-flex;
+}
+
+.node-actions .el-button {
+  margin-left: 2px;
+  padding: 2px;
 }
 
 .main-content {

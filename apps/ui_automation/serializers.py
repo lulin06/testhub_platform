@@ -9,8 +9,47 @@ from .models import (
     AICase, AIExecutionRecord
 )
 from django.contrib.auth import get_user_model
+from urllib.parse import urlparse
+import re
 
 User = get_user_model()
+
+
+def validate_test_case_step_data(
+    *,
+    action_type,
+    assert_type='',
+    input_value='',
+    assert_value='',
+    element=None,
+    project_id=None,
+):
+    """校验 UI 测试步骤的动作、目标元素和参数之间的约束。"""
+    element_actions = {'click', 'fill', 'getText', 'waitFor', 'hover', 'scroll'}
+
+    if action_type == 'navigate':
+        url = str(input_value or '').strip()
+        parsed_url = urlparse(url)
+        # 支持运行时变量，例如 {base_url}/login，由执行器在运行时解析。
+        has_runtime_variable = bool(re.search(r'\{[^{}]+\}', url))
+        if not url or (
+            not has_runtime_variable
+            and (parsed_url.scheme not in {'http', 'https'} or not parsed_url.netloc)
+        ):
+            raise serializers.ValidationError('请输入有效的http/https URL')
+        if element:
+            raise serializers.ValidationError('跳转URL步骤不能绑定元素')
+    elif action_type == 'assert' and assert_type == 'urlContains':
+        if not str(assert_value or '').strip():
+            raise serializers.ValidationError('URL包含断言需要填写断言值')
+        if element:
+            raise serializers.ValidationError('URL包含断言不能绑定元素')
+    elif action_type in element_actions or action_type == 'assert':
+        if not element:
+            raise serializers.ValidationError('该步骤类型需要选择目标元素')
+
+    if element and project_id is not None and str(element.project_id) != str(project_id):
+        raise serializers.ValidationError('目标元素必须属于当前项目')
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -66,6 +105,13 @@ class ElementSerializer(serializers.ModelSerializer):
             UiProject.objects.get(id=value)
         except UiProject.DoesNotExist:
             raise serializers.ValidationError("请选择有效的项目")
+
+        # 更新项目时，校验现有分组是否仍属于目标项目。
+        group_id = self.initial_data.get('group_id', getattr(self.instance, 'group_id', None))
+        if group_id:
+            group = ElementGroup.objects.filter(id=group_id).first()
+            if group and str(group.project_id) != str(value):
+                raise serializers.ValidationError("元素分组必须属于当前项目")
         return value
 
     def validate_locator_strategy_id(self, value):
@@ -81,9 +127,14 @@ class ElementSerializer(serializers.ModelSerializer):
         """验证分组ID是否有效"""
         if value is not None:  # 允许None值
             try:
-                ElementGroup.objects.get(id=value)
+                group = ElementGroup.objects.get(id=value)
             except ElementGroup.DoesNotExist:
                 raise serializers.ValidationError("请选择有效的元素分组")
+
+            # 创建或移动元素时，禁止关联其他项目下的分组。
+            project_id = self.initial_data.get('project_id', getattr(self.instance, 'project_id', None))
+            if project_id is not None and str(group.project_id) != str(project_id):
+                raise serializers.ValidationError("元素分组必须属于当前项目")
         return value
 
     def create(self, validated_data):
@@ -535,6 +586,23 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
             'id', 'step_number', 'action_type', 'element', 'element_name', 'element_locator',
             'input_value', 'wait_time', 'assert_type', 'assert_value', 'description', 'created_at'
         ]
+
+    def validate(self, attrs):
+        """校验独立步骤接口提交的动作、元素和参数。"""
+        action_type = attrs.get('action_type', getattr(self.instance, 'action_type', None))
+        assert_type = attrs.get('assert_type', getattr(self.instance, 'assert_type', ''))
+        element = attrs.get('element', getattr(self.instance, 'element', None))
+        project_id = getattr(getattr(self.instance, 'test_case', None), 'project_id', None)
+
+        validate_test_case_step_data(
+            action_type=action_type,
+            assert_type=assert_type,
+            input_value=attrs.get('input_value', getattr(self.instance, 'input_value', '')),
+            assert_value=attrs.get('assert_value', getattr(self.instance, 'assert_value', '')),
+            element=element,
+            project_id=project_id,
+        )
+        return attrs
 
 
 class TestCaseSerializer(serializers.ModelSerializer):

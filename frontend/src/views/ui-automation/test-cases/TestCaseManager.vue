@@ -157,18 +157,36 @@
                             <el-option :label="t('uiAutomation.testCase.actionAssert')" value="assert" />
                             <el-option :label="t('uiAutomation.testCase.actionWait')" value="wait" />
                             <el-option :label="t('uiAutomation.testCase.actionSwitchTab')" value="switchTab" />
+                            <el-option :label="t('uiAutomation.testCase.actionNavigate')" value="navigate" />
                           </el-select>
                           <el-select
-                            v-if="needsElement(element.action_type)"
+                            v-if="needsElement(element)"
+                            v-model="element.element_page"
+                            :placeholder="t('uiAutomation.testCase.selectPage')"
+                            size="small"
+                            style="width: 150px"
+                            clearable
+                            @change="onElementPageChange(element)"
+                          >
+                            <el-option :label="t('uiAutomation.testCase.allPages')" value="" />
+                            <el-option
+                              v-for="page in pages"
+                              :key="page.id"
+                              :label="page.name"
+                              :value="page.name"
+                            />
+                          </el-select>
+                          <el-select
+                            v-if="needsElement(element)"
                             v-model="element.element_id"
                             :placeholder="t('uiAutomation.testCase.selectElement')"
                             size="small"
-                            style="width: 200px"
+                            style="width: 250px"
                             filterable
                             @change="onElementChange(element)"
                           >
                             <el-option
-                              v-for="elem in availableElements"
+                              v-for="elem in getElementsForStep(element)"
                               :key="elem.id"
                               :label="`${elem.name} (${elem.locator_value})`"
                               :value="elem.id"
@@ -198,7 +216,7 @@
                           <div style="display: flex; gap: 5px; flex: 1">
                             <el-input
                               v-model="element.input_value"
-                              :placeholder="element.action_type === 'switchTab' ? t('uiAutomation.testCase.switchTabPlaceholder') : t('uiAutomation.testCase.inputPlaceholder')"
+                              :placeholder="element.action_type === 'switchTab' ? t('uiAutomation.testCase.switchTabPlaceholder') : (element.action_type === 'navigate' ? t('uiAutomation.testCase.navigatePlaceholder') : t('uiAutomation.testCase.inputPlaceholder'))"
                               size="small"
                             >
                               <template #append>
@@ -234,12 +252,13 @@
                         <!-- 断言参数 -->
                         <div v-if="element.action_type === 'assert'" class="step-param">
                           <label>{{ t('uiAutomation.testCase.assertType') }}</label>
-                          <el-select v-model="element.assert_type" size="small" style="width: 150px">
+                          <el-select v-model="element.assert_type" size="small" style="width: 150px" @change="onAssertTypeChange(element)">
                             <el-option :label="t('uiAutomation.testCase.assertTextContains')" value="textContains" />
                             <el-option :label="t('uiAutomation.testCase.assertTextEquals')" value="textEquals" />
                             <el-option :label="t('uiAutomation.testCase.assertIsVisible')" value="isVisible" />
                             <el-option :label="t('uiAutomation.testCase.assertExists')" value="exists" />
                             <el-option :label="t('uiAutomation.testCase.assertHasAttribute')" value="hasAttribute" />
+                            <el-option :label="t('uiAutomation.testCase.assertUrlContains')" value="urlContains" />
                           </el-select>
                           <div style="display: flex; align-items: center; margin-left: 10px; width: 240px">
                             <el-input
@@ -521,7 +540,8 @@ import {
   getTestCases,
   runTestCase as runTestCaseApi,
   copyTestCase as copyTestCaseApi,
-  getLocatorStrategies
+  getLocatorStrategies,
+  getElementGroupTree
 } from '@/api/ui_automation'
 import { getVariableFunctions } from '@/api/data-factory'
 
@@ -532,6 +552,7 @@ const testCases = ref([])
 const selectedTestCase = ref(null)
 const currentSteps = ref([])
 const availableElements = ref([])
+const pages = ref([])
 const searchKeyword = ref('')
 const showCreateDialog = ref(false)
 const editingTestCase = ref(null)
@@ -617,10 +638,33 @@ const loadElements = async () => {
   }
 
   try {
-    const response = await getElements({ project: projectId.value })
+    const response = await getElements({ project: projectId.value, page_size: 1000 })
     availableElements.value = response.data.results || response.data
   } catch (error) {
     console.error('获取元素列表失败:', error)
+  }
+}
+
+const loadPages = async () => {
+  if (!projectId.value) {
+    pages.value = []
+    return
+  }
+
+  try {
+    const response = await getElementGroupTree({ project: projectId.value })
+    const flattenedPages = []
+    const flatten = (groups) => {
+      groups.forEach(group => {
+        flattenedPages.push({ id: group.id, name: group.name })
+        if (group.children) flatten(group.children)
+      })
+    }
+    flatten(response.data || [])
+    pages.value = flattenedPages
+  } catch (error) {
+    pages.value = []
+    console.error('获取页面列表失败:', error)
   }
 }
 
@@ -631,7 +675,8 @@ const onProjectChange = async () => {
 
   await Promise.all([
     loadTestCases(),
-    loadElements()
+    loadElements(),
+    loadPages()
   ])
 }
 
@@ -647,6 +692,7 @@ const selectTestCase = (testCase) => {
     currentSteps.value = testCase.steps.map(step => ({
       ...step,
       element_id: step.element || '',
+      element_page: availableElements.value.find(element => element.id === step.element)?.page || '',
       expanded: false
     }))
   } else {
@@ -662,6 +708,7 @@ const addStep = () => {
     id: Date.now(),
     action_type: 'click',
     element_id: '',
+    element_page: '',
     input_value: '',
     wait_time: 1000,
     assert_type: 'textContains',
@@ -683,7 +730,7 @@ const onStepsReorder = () => {
 
 const onActionTypeChange = (step) => {
   // 根据操作类型重置相关参数
-  if (step.action_type !== 'fill') {
+  if (!['fill', 'navigate', 'switchTab'].includes(step.action_type)) {
     step.input_value = ''
   }
   if (step.action_type !== 'wait') {
@@ -693,26 +740,56 @@ const onActionTypeChange = (step) => {
     step.assert_type = 'textContains'
     step.assert_value = ''
   }
+  if (['navigate', 'wait', 'switchTab', 'screenshot'].includes(step.action_type)) {
+    step.element_id = ''
+    step.element_page = ''
+  }
+  if (step.action_type === 'assert' && step.assert_type === 'urlContains') {
+    step.element_id = ''
+    step.element_page = ''
+  }
+}
+
+const onAssertTypeChange = (step) => {
+  if (step.assert_type === 'urlContains') {
+    step.element_id = ''
+    step.element_page = ''
+  }
+}
+
+const onElementPageChange = (step) => {
+  const selectedElement = availableElements.value.find(element => element.id === step.element_id)
+  if (selectedElement && step.element_page && selectedElement.page !== step.element_page) {
+    step.element_id = ''
+  }
 }
 
 const onElementChange = (step) => {
   // 元素变化时的处理
   const element = availableElements.value.find(e => e.id === step.element_id)
+  if (element) step.element_page = element.page || ''
   if (element && !step.description) {
     step.description = `${getActionTypeText(step.action_type)}${element.name}`
   }
 }
 
 const needsInputValue = (actionType) => {
-  return ['fill', 'switchTab'].includes(actionType)
+  return ['fill', 'switchTab', 'navigate'].includes(actionType)
 }
 
 const needsWaitTime = (actionType) => {
   return ['wait', 'waitFor'].includes(actionType)
 }
 
-const needsElement = (actionType) => {
-  return !['wait', 'switchTab', 'screenshot'].includes(actionType)
+const needsElement = (step) => {
+  if (!step) return false
+  if (['wait', 'switchTab', 'screenshot', 'navigate'].includes(step.action_type)) return false
+  return !(step.action_type === 'assert' && step.assert_type === 'urlContains')
+}
+
+const getElementsForStep = (step) => {
+  if (!step?.element_page) return availableElements.value
+  return availableElements.value.filter(element => element.page === step.element_page)
 }
 
 const expandAllSteps = () => {
@@ -728,7 +805,7 @@ const saveTestCase = async () => {
   try {
     const updateData = {
       ...selectedTestCase.value,
-      steps: currentSteps.value
+      steps: currentSteps.value.map(({ expanded, element_page, ...step }) => step)
     }
 
     await updateTestCase(selectedTestCase.value.id, updateData)
@@ -1143,7 +1220,8 @@ const getActionTypeText = (actionType) => {
     'scroll': t('uiAutomation.testCase.actionType.scroll'),
     'screenshot': t('uiAutomation.testCase.actionType.screenshot'),
     'assert': t('uiAutomation.testCase.actionType.assert'),
-    'wait': t('uiAutomation.testCase.actionType.wait')
+    'wait': t('uiAutomation.testCase.actionType.wait'),
+    'navigate': t('uiAutomation.testCase.actionType.navigate')
   }
   return textMap[actionType] || actionType
 }
@@ -1165,7 +1243,8 @@ const getActionText = (actionType) => {
     'scroll': t('uiAutomation.testCase.actionText.scroll'),
     'screenshot': t('uiAutomation.testCase.actionText.screenshot'),
     'assert': t('uiAutomation.testCase.actionText.assert'),
-    'wait': t('uiAutomation.testCase.actionText.wait')
+    'wait': t('uiAutomation.testCase.actionText.wait'),
+    'navigate': t('uiAutomation.testCase.actionText.navigate')
   }
   return actionMap[actionType] || actionType
 }
