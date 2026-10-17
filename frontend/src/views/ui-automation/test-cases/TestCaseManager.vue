@@ -14,8 +14,10 @@
     </div>
 
     <div class="main-content">
+      <ResizableSplitPane v-model="leftPanelWidth" min-size="240" max-size="520" second-min-size="480" :storage-key="'ui-automation.test-cases.sidebar-width'">
+        <template #first>
       <!-- 左侧：测试用例列表 -->
-      <div class="left-panel">
+          <div class="left-panel">
         <div class="panel-header">
           <h3>{{ t('uiAutomation.testCase.testCaseList') }}</h3>
           <el-input
@@ -66,10 +68,12 @@
             </div>
           </div>
         </div>
-      </div>
+          </div>
+        </template>
 
-      <!-- 右侧：测试用例详情和步骤编辑 -->
-      <div class="right-panel">
+        <template #second>
+          <!-- 右侧：测试用例详情和步骤编辑 -->
+          <div class="right-panel">
         <div v-if="selectedTestCase" class="test-case-detail">
           <div class="detail-header">
             <h3>{{ selectedTestCase.name }}</h3>
@@ -415,7 +419,9 @@
         <div v-else class="no-selection">
           <el-empty :description="t('uiAutomation.testCase.selectTestCase')" />
         </div>
-      </div>
+          </div>
+        </template>
+      </ResizableSplitPane>
     </div>
 
     <!-- 新建/编辑测试用例对话框 -->
@@ -520,6 +526,7 @@
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -530,6 +537,7 @@ import DataFactorySelector from '@/components/DataFactorySelector.vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
+const leftPanelWidth = ref(350)
 
 import {
   getUiProjects,
@@ -1321,7 +1329,7 @@ onMounted(async () => {
 }
 
 .left-panel {
-  width: 350px;
+  width: 100%;
   border-right: 1px solid #e6e6e6;
   background: white;
   display: flex;
@@ -1409,6 +1417,7 @@ onMounted(async () => {
 
 .right-panel {
   flex: 1;
+  min-width: 0;
   background: white;
   display: flex;
   flex-direction: column;

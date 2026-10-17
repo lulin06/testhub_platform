@@ -1,8 +1,10 @@
 <template>
   <div class="element-manager">
     <div class="element-layout">
+      <ResizableSplitPane v-model="sidebarWidth" min-size="240" max-size="520" second-min-size="480" :storage-key="'ui-automation.elements.sidebar-width'">
+        <template #first>
       <!-- 左侧页面树 -->
-      <div class="sidebar">
+          <div class="sidebar">
         <div class="sidebar-header">
           <el-select v-model="selectedProject" :placeholder="$t('common.selectProject')" @change="onProjectChange">
             <el-option
@@ -79,10 +81,12 @@
             </template>
           </el-tree>
         </div>
-      </div>
+          </div>
+        </template>
 
-      <!-- 右侧元素详情 -->
-      <div class="main-content">
+        <template #second>
+          <!-- 右侧元素详情 -->
+          <div class="main-content">
         <div v-if="!selectedElement" class="empty-state">
           <el-empty :description="$t('uiAutomation.element.emptyElementTip')">
             <el-button type="primary" @click="createEmptyElement">{{ $t('uiAutomation.element.createNewElement') }}</el-button>
@@ -207,7 +211,9 @@
             </el-form>
           </div>
         </div>
-      </div>
+          </div>
+        </template>
+      </ResizableSplitPane>
     </div>
 
     <!-- 创建页面对话框 -->
@@ -283,6 +289,7 @@
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -310,6 +317,7 @@ import {
 
 // 国际化
 const { t } = useI18n()
+const sidebarWidth = ref(300)
 
 // 响应式数据
 const projects = ref([])
@@ -967,6 +975,11 @@ const deleteElementNode = async (node) => {
 
 // 节点右键点击
 const onNodeRightClick = (event, data) => {
+  if (data.type === 'element') {
+    showContextMenu.value = false
+    return
+  }
+
   console.log('Node right click event:', event, 'Data:', data)
   event.preventDefault()
 
@@ -1456,7 +1469,7 @@ const updatePage = async () => {
 }
 
 .sidebar {
-  width: 300px;
+  width: 100%;
   border-right: 1px solid #e4e7ed;
   display: flex;
   flex-direction: column;
@@ -1522,6 +1535,7 @@ const updatePage = async () => {
 
 .main-content {
   flex: 1;
+  min-width: 0;
   overflow: auto;
   padding: 20px;
 }

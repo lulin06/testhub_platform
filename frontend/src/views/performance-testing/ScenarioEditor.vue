@@ -49,8 +49,10 @@
     </div>
 
     <div class="editor-body">
-      <!-- ---------- 左侧步骤列表 ---------- -->
-      <div class="step-panel">
+      <ResizableSplitPane v-model="stepPanelWidth" min-size="260" max-size="520" second-min-size="480" :storage-key="'performance-testing.scenario-editor.steps-width'">
+        <template #first>
+          <!-- ---------- 左侧步骤列表 ---------- -->
+          <div class="step-panel">
         <div class="panel-head">
           <span class="panel-title">{{ t('performanceTesting.editor.steps') }}</span>
           <span class="panel-count">{{ steps.length }}</span>
@@ -119,10 +121,12 @@
             {{ t('performanceTesting.editor.importFromApi') }}
           </el-button>
         </div>
-      </div>
+          </div>
+        </template>
 
-      <!-- ---------- 右侧主区 ---------- -->
-      <div class="main-panel">
+        <template #second>
+          <!-- ---------- 右侧主区 ---------- -->
+          <div class="main-panel">
         <el-tabs v-model="activeTab" class="main-tabs">
           <!-- 请求编排 -->
           <el-tab-pane :label="t('performanceTesting.editor.tabRequest')" name="request">
@@ -606,7 +610,9 @@
             </div>
           </el-tab-pane>
         </el-tabs>
-      </div>
+          </div>
+        </template>
+      </ResizableSplitPane>
     </div>
 
     <!-- ---------- 从接口导入 ---------- -->
@@ -718,6 +724,7 @@
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -748,6 +755,7 @@ const VARIABLE_TYPES = ['CONSTANT', 'RANDOM_INT', 'RANDOM_STRING', 'ENUM', 'UUID
 const variableTypes = VARIABLE_TYPES
 
 const scenarioId = ref(Number(route.params.id) || 0)
+const stepPanelWidth = ref(320)
 const isNew = computed(() => !scenarioId.value)
 
 const loading = ref(false)
@@ -1375,7 +1383,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnloadGua
 }
 
 .step-panel {
-  width: 320px;
+  width: 100%;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;

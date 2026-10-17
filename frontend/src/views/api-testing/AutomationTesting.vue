@@ -9,8 +9,10 @@
     </div>
 
     <div class="content-layout">
+      <ResizableSplitPane v-model="sidebarWidth" min-size="240" max-size="520" second-min-size="480" :storage-key="'api-testing.automation.sidebar-width'">
+        <template #first>
       <!-- 左侧项目选择和测试套件列表 -->
-      <div class="sidebar">
+          <div class="sidebar">
         <div class="project-selector">
           <el-select
             v-model="selectedProject"
@@ -65,10 +67,12 @@
             </div>
           </el-scrollbar>
         </div>
-      </div>
+          </div>
+        </template>
 
-      <!-- 右侧测试套件详情 -->
-      <div class="main-content">
+        <template #second>
+          <!-- 右侧测试套件详情 -->
+          <div class="main-content">
         <div v-if="!selectedSuite" class="empty-state">
           <el-empty :description="$t('apiTesting.automation.selectSuiteHint')" />
         </div>
@@ -196,7 +200,9 @@
             </el-table>
           </div>
         </div>
-      </div>
+          </div>
+        </template>
+      </ResizableSplitPane>
     </div>
 
     <!-- 创建/编辑测试套件对话框 -->
@@ -363,6 +369,7 @@
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
@@ -374,6 +381,7 @@ import api from '@/utils/api'
 import dayjs from 'dayjs'
 
 const { t } = useI18n()
+const sidebarWidth = ref(300)
 
 const projects = ref([])
 const selectedProject = ref(null)
@@ -919,7 +927,7 @@ onMounted(() => {
 }
 
 .sidebar {
-  width: 300px;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 15px;
@@ -984,6 +992,7 @@ onMounted(() => {
 
 .main-content {
   flex: 1;
+  min-width: 0;
   background: white;
   border-radius: 6px;
   border: 1px solid #e4e7ed;

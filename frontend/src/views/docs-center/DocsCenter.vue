@@ -1,7 +1,9 @@
 <template>
   <div class="docs-center">
-    <!-- 左侧文档列表 -->
-    <div class="docs-sidebar">
+    <ResizableSplitPane v-model="sidebarWidth" min-size="220" max-size="480" second-min-size="480" :storage-key="'docs-center.sidebar-width'">
+      <template #first>
+        <!-- 左侧文档列表 -->
+        <div class="docs-sidebar">
       <div class="sidebar-header">
         <h2>{{ $t('docs.title') }}</h2>
         <el-input
@@ -25,18 +27,23 @@
         </div>
         <el-empty v-if="!loading && filteredDocs.length === 0" :description="$t('docs.empty')" :image-size="60" />
       </el-scrollbar>
-    </div>
+        </div>
+      </template>
 
-    <!-- 右侧内容区 -->
-    <div class="docs-content">
+      <template #second>
+        <!-- 右侧内容区 -->
+        <div class="docs-content">
       <div v-if="contentLoading" class="content-loading" v-loading="true" />
       <div v-else-if="currentContent" class="markdown-body" v-html="renderedHtml" />
       <el-empty v-else :description="$t('docs.selectTip')" />
-    </div>
+        </div>
+      </template>
+    </ResizableSplitPane>
   </div>
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
@@ -45,6 +52,7 @@ import { marked } from 'marked'
 import api from '@/utils/api'
 
 const { t } = useI18n()
+const sidebarWidth = ref(300)
 
 const docs = ref([])
 const keyword = ref('')
@@ -105,7 +113,7 @@ onMounted(() => {
 }
 
 .docs-sidebar {
-  width: 300px;
+  width: 100%;
   flex-shrink: 0;
   background: #fff;
   border-radius: 8px;
@@ -158,6 +166,7 @@ onMounted(() => {
 
 .docs-content {
   flex: 1;
+  min-width: 0;
   background: #fff;
   border-radius: 8px;
   border: 1px solid #ebeef5;

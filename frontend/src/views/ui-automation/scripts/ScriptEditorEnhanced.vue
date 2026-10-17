@@ -10,8 +10,10 @@
     </div>
 
     <div class="main-content">
-      <!-- 左侧:���素库(页面树形式) -->
-      <div class="left-panel">
+      <ResizableSplitPane v-model="elementLibraryWidth" min-size="240" max-size="520" second-min-size="560" :storage-key="'ui-automation.script-editor.element-library-width'">
+        <template #first>
+          <!-- 左侧:元素库(页面树形式) -->
+          <div class="left-panel">
         <div class="panel-header">
           <h3>{{ $t('uiAutomation.scriptEditor.elementLibrary') }}</h3>
           <el-input
@@ -54,10 +56,14 @@
             </template>
           </el-tree>
         </div>
-      </div>
+          </div>
+        </template>
 
-      <!-- 中间:代码编辑器 -->
-      <div class="center-panel">
+        <template #second>
+          <ResizableSplitPane v-model="detailsPanelWidth" resize-target="second" min-size="280" max-size="520" first-min-size="480" second-min-size="480" :storage-key="'ui-automation.script-editor.details-width'">
+            <template #first>
+              <!-- 中间:代码编辑器 -->
+              <div class="center-panel">
         <div class="editor-toolbar">
           <div class="toolbar-left">
             <el-select v-model="scriptLanguage" size="small" style="width: 120px">
@@ -102,10 +108,12 @@
           <span>{{ $t('uiAutomation.scriptEditor.characters') }}: {{ scriptContent.length }}</span>
           <span>{{ $t('uiAutomation.scriptEditor.language') }}: {{ scriptLanguage }}</span>
         </div>
-      </div>
+              </div>
+            </template>
 
-      <!-- 右侧:执行日志和元素详情 -->
-      <div class="right-panel">
+            <template #second>
+              <!-- 右侧:执行日志和元素详情 -->
+              <div class="right-panel">
         <el-tabs v-model="rightActiveTab" type="border-card">
           <!-- 执行日志 -->
           <el-tab-pane :label="$t('uiAutomation.scriptEditor.executionLogs')" name="logs">
@@ -166,12 +174,17 @@
             </div>
           </el-tab-pane>
         </el-tabs>
-      </div>
+              </div>
+            </template>
+          </ResizableSplitPane>
+        </template>
+      </ResizableSplitPane>
     </div>
   </div>
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -193,6 +206,8 @@ const { t } = useI18n()
 // 响应式数据
 const projects = ref([])
 const projectId = ref('')
+const elementLibraryWidth = ref(300)
+const detailsPanelWidth = ref(350)
 const scriptContent = ref('')
 const scriptLanguage = ref('python')
 const scriptFramework = ref('playwright')
@@ -600,12 +615,13 @@ onMounted(async () => {
 
 .main-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   overflow: hidden;
 }
 
 .left-panel {
-  width: 300px;
+  width: 100%;
   border-right: 1px solid #e6e6e6;
   display: flex;
   flex-direction: column;
@@ -622,14 +638,39 @@ onMounted(async () => {
 }
 
 .center-panel {
-  flex: 1;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid #e6e6e6;
 }
 
 .right-panel {
-  width: 350px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.right-panel :deep(.el-tabs) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.right-panel :deep(.el-tabs__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.right-panel :deep(.el-tab-pane),
+.right-panel .panel-content {
+  height: 100%;
 }
 
 .panel-content {
