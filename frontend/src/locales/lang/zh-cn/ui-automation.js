@@ -202,6 +202,8 @@ export default {
     createPageTitle: '创建页面',
     editPageTitle: '编辑页面',
     addElement: '添加元素',
+    copyElement: '复制元素',
+    deleteElement: '删除元素',
     pageName: '页面名称',
     pageNamePlaceholder: '请输入页面名称',
     parentPage: '父页面',
@@ -285,6 +287,10 @@ export default {
       deleteConfirmTitle: '确认删除',
       deleteSuccess: '元素删除成功',
       deleteFailed: '删除失败',
+      copySuccess: '元素复制成功',
+      copyFailed: '元素复制失败',
+      orderSaveSuccess: '元素顺序保存成功',
+      orderSaveFailed: '元素顺序保存失败',
       pageCreateSuccess: '页面创建成功',
       pageCreateFailed: '页面创建失败',
       pageUpdateSuccess: '页面更新成功',
@@ -1110,10 +1116,14 @@ export default {
     actionAssert: '断言',
     actionWait: '等待',
     actionSwitchTab: '切换标签页',
+    actionNavigate: '跳转URL',
+    selectPage: '选择页面',
+    allPages: '全部页面',
     selectElement: '选择元素',
     inputValue: '输入值：',
     inputPlaceholder: '请输入内容，支持变量如 \'{random_phone()}\'',
     switchTabPlaceholder: '输入索引(0,1...)或留空切换到最新',
+    navigatePlaceholder: '请输入完整URL，例如 https://example.com',
     insertVariable: '插入动态变量',
     referenceDataFactory: '引用数据工厂',
     waitTime: '等待时间（毫秒）：',
@@ -1123,6 +1133,7 @@ export default {
     assertIsVisible: '元素可见',
     assertExists: '元素存在',
     assertHasAttribute: '属性值',
+    assertUrlContains: 'URL包含',
     expectedValue: '期望值',
     stepDescription: '步骤描述：',
     stepDescPlaceholder: '描述这个步骤的作用',
@@ -1228,7 +1239,8 @@ export default {
       scroll: '滚动',
       screenshot: '截图',
       assert: '断言',
-      wait: '等待'
+      wait: '等待',
+      navigate: '跳转URL'
     },
     // 操作文本（用于执行日志中显示操作描述）
     actionText: {
@@ -1240,7 +1252,8 @@ export default {
       scroll: '滚动',
       screenshot: '截图',
       assert: '断言',
-      wait: '等待'
+      wait: '等待',
+      navigate: '跳转URL'
     },
     // 状态文本
     status: {
@@ -1292,7 +1305,8 @@ export default {
     scroll: '滚动',
     screenshot: '截图',
     assert: '断言',
-    wait: '等待'
+    wait: '等待',
+    navigate: '跳转URL'
   },
 
   // 消息提示

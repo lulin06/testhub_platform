@@ -212,6 +212,18 @@ class PlaywrightTestEngine:
         screenshot_base64 = None
 
         try:
+            if action_type == 'navigate':
+                if not resolved_input_value:
+                    return False, "✗ 跳转URL失败: URL不能为空", None
+                success, log = await self.navigate(resolved_input_value)
+                if not success:
+                    try:
+                        screenshot = await self.page.screenshot()
+                        screenshot_base64 = f"data:image/png;base64,{base64.b64encode(screenshot).decode()}"
+                    except Exception:
+                        pass
+                return success, log, screenshot_base64
+
             # wait和screenshot操作不需要元素定位器
             if action_type == 'wait':
                 wait_seconds = step.wait_time / 1000 if step.wait_time else 1
@@ -293,6 +305,18 @@ class PlaywrightTestEngine:
                 log += f"  - 页面标题: {await self.page.title()}\n"
                 log += f"  - 执行时间: {execution_time}秒"
                 return True, log, None
+
+            elif action_type == 'assert' and step.assert_type == 'urlContains':
+                current_url = self.page.url
+                if resolved_assert_value and resolved_assert_value in current_url:
+                    return True, f"✓ 断言通过: URL包含 '{resolved_assert_value}'\n  - 实际URL: '{current_url}'", None
+                log = f"✗ 断言失败: URL不包含 '{resolved_assert_value}'\n  - 实际URL: '{current_url}'"
+                try:
+                    screenshot = await self.page.screenshot()
+                    screenshot_base64 = f"data:image/png;base64,{base64.b64encode(screenshot).decode()}"
+                except Exception:
+                    pass
+                return False, log, screenshot_base64
 
             # 其他操作需要元素定位器
             # 获取元素定位器

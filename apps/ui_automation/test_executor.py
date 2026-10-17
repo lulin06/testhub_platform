@@ -642,8 +642,21 @@ class TestExecutor:
         }
 
         try:
+            if step_data['action_type'] == 'navigate':
+                url = resolve_variables(step_data.get('input_value', ''))
+                if not url:
+                    step_result['error'] = '跳转URL失败: URL不能为空'
+                else:
+                    self.current_page.goto(url, wait_until='networkidle', timeout=max(step_data.get('wait_time', 30000), 30000))
+                    step_result['success'] = True
+            elif step_data['action_type'] == 'assert' and step_data.get('assert_type') == 'urlContains':
+                expected_url = resolve_variables(step_data.get('assert_value', ''))
+                actual_url = self.current_page.url
+                step_result['success'] = bool(expected_url and expected_url in actual_url)
+                if not step_result['success']:
+                    step_result['error'] = f"✗ 断言失败: URL不包含 '{expected_url}'\n  - 实际URL: '{actual_url}'"
             # 获取元素定位器
-            if step_data['element']:
+            elif step_data['element']:
                 element = step_data['element']
                 locator_value = element['locator_value']
                 locator_strategy = element['locator_strategy'].lower()
@@ -1905,7 +1918,20 @@ class TestExecutor:
         }
 
         try:
-            if step_data['element']:
+            if step_data['action_type'] == 'navigate':
+                url = resolve_variables(step_data.get('input_value', ''))
+                if not url:
+                    step_result['error'] = '跳转URL失败: URL不能为空'
+                else:
+                    driver.get(url)
+                    step_result['success'] = True
+            elif step_data['action_type'] == 'assert' and step_data.get('assert_type') == 'urlContains':
+                expected_url = resolve_variables(step_data.get('assert_value', ''))
+                actual_url = driver.current_url
+                step_result['success'] = bool(expected_url and expected_url in actual_url)
+                if not step_result['success']:
+                    step_result['error'] = f"✗ 断言失败: URL不包含 '{expected_url}'\n  - 实际URL: '{actual_url}'"
+            elif step_data['element']:
                 element = step_data['element']
                 locator_value = element['locator_value']
                 locator_strategy = element['locator_strategy'].lower()
