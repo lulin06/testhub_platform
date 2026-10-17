@@ -316,7 +316,7 @@ const handleNavigate = (type) => {
     'app': '/app-automation/dashboard',
     'ai-intelligent': '/ai-intelligent-mode/testing',
     'assistant': '/ai-generation/assistant',
-    'config': '/configuration/ai-model',
+    'config': '/configuration/projects',
     'judge': '/llm-judge/dashboard',
     'data': '/data-factory',
     'performance': '/performance-testing/dashboard',
