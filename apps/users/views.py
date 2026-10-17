@@ -5,7 +5,7 @@ from django.contrib.auth import login, logout
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from .models import User
-from .serializers import UserSerializer, UserCreateSerializer, LoginSerializer
+from .serializers import UserSerializer, UserCreateSerializer, LoginSerializer, ChangePasswordSerializer
 
 # JWT 相关导入
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -52,7 +52,16 @@ class RegisterView(generics.CreateAPIView):
 @csrf_exempt
 def login_view(request):
     serializer = LoginSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
+    if not serializer.is_valid():
+        errors = serializer.errors
+        message = errors.get('non_field_errors') or errors.get('username') or errors.get('password')
+        if isinstance(message, (list, tuple)):
+            message = message[0] if message else None
+        return Response({
+            'error': str(message or '登录参数不正确'),
+            'error_code': getattr(message, 'code', 'invalid_login_request'),
+        }, status=status.HTTP_400_BAD_REQUEST)
+
     user = serializer.validated_data['user']
     login(request, user)
 
@@ -94,6 +103,21 @@ def profile_view(request):
     serializer = UserSerializer(request.user)
     return Response(serializer.data)
 
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def change_password_view(request):
+    """修改当前登录用户密码。"""
+    serializer = ChangePasswordSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    if not request.user.check_password(serializer.validated_data['current_password']):
+        return Response({'current_password': '当前密码错误'}, status=status.HTTP_400_BAD_REQUEST)
+
+    request.user.set_password(serializer.validated_data['new_password'])
+    request.user.save(update_fields=['password', 'updated_at'])
+    return Response({'message': '密码修改成功'})
+
 class UserListView(generics.ListCreateAPIView):
     queryset = User.objects.all().order_by('username')
     serializer_class = UserSerializer
@@ -126,19 +150,19 @@ def send_register_code(request):
     mode = request.data.get('mode', 'register')  # 'register' 或 'login'
 
     if not phone:
-        return Response({'success': False, 'error': '请输入手机号'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'success': False, 'error': '请输入手机号', 'error_code': 'phone_required'}, status=status.HTTP_400_BAD_REQUEST)
     if not captcha_token or not captcha_code:
-        return Response({'success': False, 'error': '请输入图形验证码'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'success': False, 'error': '请输入图形验证码', 'error_code': 'captcha_required'}, status=status.HTTP_400_BAD_REQUEST)
 
     # 登录模式：校验手机号是否已注册
     if mode == 'login':
         if not User.objects.filter(phone=phone).exists():
-            return Response({'success': False, 'error': '该手机号未注册，请先注册'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'success': False, 'error': '该手机号未注册，请先注册', 'error_code': 'phone_not_registered'}, status=status.HTTP_400_BAD_REQUEST)
 
     # 注册模式：校验手机号未被注册
     if mode == 'register':
         if User.objects.filter(phone=phone).exists():
-            return Response({'success': False, 'error': '该手机号已被注册'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'success': False, 'error': '该手机号已被注册', 'error_code': 'phone_registered'}, status=status.HTTP_400_BAD_REQUEST)
 
     result = send_register_verify_code(phone, captcha_token, captcha_code)
 
@@ -159,26 +183,31 @@ def sms_login_view(request):
 
     # 校验手机号
     if not phone:
-        return Response({'error': '请输入手机号'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': '请输入手机号', 'error_code': 'phone_required'}, status=status.HTTP_400_BAD_REQUEST)
     if not re.match(r'^1[3-9]\d{9}$', phone):
-        return Response({'error': '手机号格式不正确'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': '手机号格式不正确', 'error_code': 'phone_invalid'}, status=status.HTTP_400_BAD_REQUEST)
 
     # 校验短信验证码
     if not verify_code or not verify_code_token:
-        return Response({'error': '请输入短信验证码'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': '请输入短信验证码', 'error_code': 'sms_code_required'}, status=status.HTTP_400_BAD_REQUEST)
 
     valid, error = validate_verify_code(phone, verify_code_token, verify_code)
     if not valid:
-        return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
+        code = {
+            '验证码已过期，请重新获取': 'sms_code_expired',
+            '验证码错误': 'sms_code_invalid',
+            '手机号与验证码不匹配': 'sms_code_phone_mismatch',
+        }.get(error, 'sms_code_invalid')
+        return Response({'error': error, 'error_code': code}, status=status.HTTP_400_BAD_REQUEST)
 
     # 查找用户
     try:
         user = User.objects.get(phone=phone)
     except User.DoesNotExist:
-        return Response({'error': '该手机号未注册，请先注册'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': '该手机号未注册，请先注册', 'error_code': 'phone_not_registered'}, status=status.HTTP_400_BAD_REQUEST)
 
     if not user.is_active:
-        return Response({'error': '用户已被禁用'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': '用户已被禁用', 'error_code': 'account_disabled'}, status=status.HTTP_400_BAD_REQUEST)
 
     # 生成 JWT
     refresh = RefreshToken.for_user(user)

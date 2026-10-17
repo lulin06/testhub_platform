@@ -119,12 +119,12 @@ def send_register_verify_code(phone_number, captcha_token, captcha_code):
 
     # 校验图形验证码
     if not validate_captcha(captcha_token, captcha_code):
-        return {'success': False, 'error': '图形验证码错误或已过期'}
+        return {'success': False, 'error': '图形验证码错误或已过期', 'error_code': 'captcha_invalid'}
 
     # 校验发送频率
     allowed, remaining = check_rate_limit(phone_number)
     if not allowed:
-        return {'success': False, 'error': f'发送过于频繁，请 {remaining} 秒后再试'}
+        return {'success': False, 'error': f'发送过于频繁，请 {remaining} 秒后再试', 'error_code': 'sms_rate_limited'}
 
     # 生成验证码
     code = _generate_verify_code()
@@ -149,7 +149,7 @@ def send_register_verify_code(phone_number, captcha_token, captcha_code):
         redis_client.delete(f"sms:verify_code:{token}")
         redis_client.delete(f"sms:limit:{phone_number}")
         redis_client.delete(f"sms:phone:{token}")
-        return {'success': False, 'error': f'短信发送失败: {result.get("Message", "未知错误")}'}
+        return {'success': False, 'error': f'短信发送失败: {result.get("Message", "未知错误")}', 'error_code': 'sms_send_failed'}
 
     return {
         'success': True,

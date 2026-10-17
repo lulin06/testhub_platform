@@ -161,7 +161,7 @@
             <el-form-item prop="phone">
               <el-input
                 v-model="form.phone"
-                placeholder="请输入手机号"
+                :placeholder="$t('auth.phonePlaceholder')"
                 size="large"
                 :prefix-icon="Phone"
                 maxlength="11"
@@ -174,7 +174,7 @@
                 <el-form-item prop="captcha_code">
                   <el-input
                     v-model="form.captcha_code"
-                    placeholder="图形验证码"
+                    :placeholder="$t('auth.captchaPlaceholder')"
                     size="large"
                     maxlength="4"
                   />
@@ -183,10 +183,10 @@
               <el-col :span="10">
                 <img
                   :src="captchaImage"
-                  alt="验证码"
+                  :alt="$t('auth.captchaAlt')"
                   class="captcha-img"
                   @click="refreshCaptcha"
-                  title="点击刷新验证码"
+                  :title="$t('auth.refreshCaptcha')"
                 />
               </el-col>
             </el-row>
@@ -195,7 +195,7 @@
             <el-form-item prop="verify_code">
               <el-input
                 v-model="form.verify_code"
-                placeholder="短信验证码"
+                :placeholder="$t('auth.smsCodePlaceholder')"
                 size="large"
                 maxlength="6"
               >
@@ -206,7 +206,7 @@
                     @click="sendVerifyCode"
                     style="min-width: 110px"
                   >
-                    {{ smsCountdown > 0 ? `${smsCountdown}s后重试` : '发送验证码' }}
+                    {{ smsCountdown > 0 ? t('auth.sendCodeRetry', { seconds: smsCountdown }) : t('auth.sendCode') }}
                   </el-button>
                 </template>
               </el-input>
@@ -288,9 +288,9 @@ const form = reactive({
 
 const validatePhone = (rule, value, callback) => {
   if (!value) {
-    callback(new Error('请输入手机号'))
+    callback(new Error(t('auth.phoneRequired')))
   } else if (!/^1[3-9]\d{9}$/.test(value)) {
-    callback(new Error('手机号格式不正确'))
+    callback(new Error(t('auth.phoneInvalid')))
   } else {
     callback()
   }
@@ -308,10 +308,10 @@ const rules = {
     { required: true, validator: validatePhone, trigger: 'blur' }
   ],
   captcha_code: [
-    { required: true, message: '请输入图形验证码', trigger: 'blur' }
+    { required: true, message: computed(() => t('auth.captchaRequired')), trigger: 'blur' }
   ],
   verify_code: [
-    { required: true, message: '请输入短信验证码', trigger: 'blur' }
+    { required: true, message: computed(() => t('auth.smsCodeRequired')), trigger: 'blur' }
   ]
 }
 
@@ -358,11 +358,11 @@ const refreshCaptcha = async () => {
 // 发送短信验证码
 const sendVerifyCode = async () => {
   if (!form.phone) {
-    ElMessage.warning('请先输入手机号')
+    ElMessage.warning(t('auth.phoneRequired'))
     return
   }
   if (!form.captcha_code) {
-    ElMessage.warning('请先输入图形验证码')
+    ElMessage.warning(t('auth.captchaRequired'))
     return
   }
 
@@ -375,7 +375,7 @@ const sendVerifyCode = async () => {
       mode: 'login'
     })
     form.verify_code_token = response.data.verify_code_token
-    ElMessage.success('验证码已发送')
+    ElMessage.success(t('auth.smsCodeSent'))
     // 开始 60 秒倒计时
     smsCountdown.value = 60
     countdownTimer = setInterval(() => {
@@ -386,8 +386,7 @@ const sendVerifyCode = async () => {
       }
     }, 1000)
   } catch (error) {
-    const errMsg = error.response?.data?.error || '验证码发送失败'
-    ElMessage.error(errMsg)
+    ElMessage.error(getLoginErrorMessage(error))
     refreshCaptcha()
   } finally {
     sendingSms.value = false
@@ -411,7 +410,7 @@ const handleLogin = async () => {
           ElMessage.success(t('auth.loginSuccess'))
           await router.replace('/home')
         } catch (error) {
-          ElMessage.error(error.response?.data?.error || t('auth.loginFailed'))
+          ElMessage.error(getLoginErrorMessage(error))
           refreshCaptcha()
         } finally {
           loading.value = false
@@ -430,12 +429,38 @@ const handleLogin = async () => {
         ElMessage.success(t('auth.loginSuccess'))
         await router.replace('/home')
       } catch (error) {
-        ElMessage.error(error.response?.data?.error || t('auth.loginFailed'))
+        ElMessage.error(getLoginErrorMessage(error))
       } finally {
         loading.value = false
       }
     }
   })
+}
+
+const getLoginErrorMessage = (error) => {
+  const data = error?.response?.data
+  if (data?.error_code) {
+    const localized = t(`auth.loginErrors.${data.error_code}`)
+    if (localized && localized !== `auth.loginErrors.${data.error_code}`) return localized
+  }
+
+  // 兼容旧版本后端没有返回 error_code 的情况，避免英文界面直接显示中文服务端文案。
+  if (currentLanguage.value === 'en') return error?.response ? t('auth.loginFailed') : t('auth.networkError')
+
+  const candidates = [
+    data?.error,
+    data?.detail,
+    data?.non_field_errors,
+    data?.username,
+    data?.password,
+  ]
+
+  for (const candidate of candidates) {
+    const message = Array.isArray(candidate) ? candidate[0] : candidate
+    if (typeof message === 'string' && message.trim()) return message
+  }
+
+  return error?.response ? t('auth.loginFailed') : t('auth.networkError')
 }
 
 onUnmounted(() => {
