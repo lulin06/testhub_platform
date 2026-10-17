@@ -1,8 +1,10 @@
 <template>
   <div class="interface-management">
     <div class="interface-layout">
+      <ResizableSplitPane v-model="sidebarWidth" min-size="240" max-size="520" second-min-size="480" :storage-key="'api-testing.interfaces.sidebar-width'">
+        <template #first>
       <!-- 左侧集合树 -->
-      <div class="sidebar">
+          <div class="sidebar">
         <div class="sidebar-header">
           <el-select v-model="selectedProject" :placeholder="$t('apiTesting.common.selectProject')" @change="onProjectChange" style="width: 100%;">
             <el-option
@@ -120,10 +122,12 @@
             </div>
           </div>
         </div>
-      </div>
+          </div>
+        </template>
 
-      <!-- 右侧请求详情 -->
-      <div class="main-content">
+        <template #second>
+          <!-- 右侧请求详情 -->
+          <div class="main-content">
         <div v-if="!selectedRequest" class="empty-state">
           <el-empty :description="$t('apiTesting.interface.selectInterface')">
             <el-button type="primary" @click="createEmptyRequest">{{ $t('apiTesting.interface.createNewInterface') }}</el-button>
@@ -866,7 +870,9 @@
             </el-tabs>
           </div>
         </div>
-      </div>
+          </div>
+        </template>
+      </ResizableSplitPane>
     </div>
 
     <!-- 创建集合对话框 -->
@@ -1051,6 +1057,7 @@
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Folder, Document, MagicStick, Search, Close, CopyDocument, Delete } from '@element-plus/icons-vue'
@@ -1064,6 +1071,7 @@ import { debounce } from 'lodash-es'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
+const sidebarWidth = ref(300)
 
 const treeRef = ref(null)
 const expandedKeys = ref([])
@@ -2878,7 +2886,7 @@ const useLocalVariableCategories = () => {
 
 /* 左侧边栏 */
 .sidebar {
-  width: 300px;
+  width: 100%;
   border-right: 1px solid #e4e7ed;
   background: #ffffff;
   overflow: visible;
@@ -3121,6 +3129,7 @@ const useLocalVariableCategories = () => {
 /* 右侧主内容 */
 .main-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: auto;

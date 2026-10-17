@@ -129,8 +129,10 @@
             </el-form>
         </el-card>
 
-        <el-row :gutter="16" class="scene-layout">
-            <el-col :span="6">
+        <div class="scene-layout">
+            <ResizableSplitPane v-model="paletteWidth" min-size="260" max-size="520" second-min-size="700" :storage-key="'app-automation.scene-builder.palette-width'">
+                <template #first>
+                    <div class="scene-pane palette-pane">
                 <el-card class="palette-card" shadow="never">
                     <template #header>
                         <div class="card-title">
@@ -211,9 +213,13 @@
                         </el-tab-pane>
                     </el-tabs>
                 </el-card>
-            </el-col>
+                    </div>
+                </template>
 
-            <el-col :span="12">
+                <template #second>
+                    <ResizableSplitPane v-model="configWidth" resize-target="second" min-size="300" max-size="560" first-min-size="520" second-min-size="360" :storage-key="'app-automation.scene-builder.config-width'">
+                        <template #first>
+                            <div class="scene-pane steps-pane">
                 <el-card class="scene-card" shadow="never">
                     <template #header>
                         <div class="card-title">
@@ -309,9 +315,11 @@
                         </template>
                     </draggable>
                 </el-card>
-            </el-col>
+                            </div>
+                        </template>
 
-            <el-col :span="6">
+                        <template #second>
+                            <div class="scene-pane config-pane">
                 <el-card class="config-card" shadow="never">
                     <template #header>
                         <div class="card-title">
@@ -485,8 +493,12 @@
                         </el-form>
                     </div>
                 </el-card>
-            </el-col>
-        </el-row>
+                            </div>
+                        </template>
+                    </ResizableSplitPane>
+                </template>
+            </ResizableSplitPane>
+        </div>
 
         <!-- 从设备创建元素对话框 -->
         <CaptureElementDialog 
@@ -899,6 +911,7 @@
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -927,6 +940,8 @@ import {
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
+const paletteWidth = ref(320)
+const configWidth = ref(360)
 
 // Reactive state
 const saving = ref(false)
@@ -2921,8 +2936,27 @@ defineExpose({
 }
 
 .scene-layout {
+    display: flex;
+    height: max(480px, calc(100vh - 420px));
     margin-top: 16px;
 }
+
+.scene-pane {
+    height: 100%;
+    min-width: 0;
+}
+
+.palette-pane,
+.steps-pane,
+.config-pane {
+    width: 100%;
+    overflow: hidden;
+}
+
+.scene-layout :deep(.el-card) {
+    height: 100%;
+}
+
 
 .card-title {
     font-weight: 600;

@@ -1,7 +1,9 @@
 <template>
   <div class="assistant-layout">
-    <!-- 左侧侧边栏 -->
-    <div class="sidebar">
+    <ResizableSplitPane v-model="sidebarWidth" min-size="220" max-size="480" second-min-size="480" :storage-key="'assistant.sidebar-width'">
+      <template #first>
+        <!-- 左侧侧边栏 -->
+        <div class="sidebar">
       <div class="new-chat-btn-wrapper">
         <el-button type="primary" class="new-chat-btn" @click="startNewChat" :icon="Plus">
           {{ $t('assistant.newChat') }}
@@ -47,10 +49,12 @@
           </template>
         </el-dropdown>
       </div>
-    </div>
+        </div>
+      </template>
 
-    <!-- 右侧主内容区 -->
-    <div class="main-content">
+      <template #second>
+        <!-- 右侧主内容区 -->
+        <div class="main-content">
       <!-- 场景1：新会话（居中输入框） -->
       <div v-if="isNewChatMode" class="welcome-screen">
         <div class="welcome-content">
@@ -144,11 +148,14 @@
           <div class="footer-tip">{{ $t('assistant.aiDisclaimer') }}</div>
         </div>
       </div>
-    </div>
+        </div>
+      </template>
+    </ResizableSplitPane>
   </div>
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -160,6 +167,7 @@ import api from '@/utils/api'
 const router = useRouter()
 const userStore = useUserStore()
 const { t, locale } = useI18n()
+const sidebarWidth = ref(260)
 
 // 状态
 const historySessions = ref([])
@@ -401,7 +409,7 @@ onMounted(() => {
 
 /* 左侧侧边栏 */
 .sidebar {
-  width: 260px;
+  width: 100%;
   background: #001529; /* 与主布局一致的深色背景 */
   border-right: 1px solid #1f1f1f;
   display: flex;
@@ -549,6 +557,7 @@ onMounted(() => {
 /* 右侧主内容区 */
 .main-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   position: relative;

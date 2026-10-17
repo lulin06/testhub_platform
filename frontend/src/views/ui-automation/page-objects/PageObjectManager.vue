@@ -14,8 +14,10 @@
     </div>
 
     <div class="main-content">
+      <ResizableSplitPane v-model="leftPanelWidth" min-size="240" max-size="520" second-min-size="480" :storage-key="'ui-automation.page-objects.sidebar-width'">
+        <template #first>
       <!-- 页面对象列表 -->
-      <div class="left-panel">
+          <div class="left-panel">
         <div class="panel-header">
           <h3>{{ $t('uiAutomation.pageObject.pageObjectList') }}</h3>
           <el-input
@@ -59,10 +61,12 @@
             </div>
           </div>
         </div>
-      </div>
+          </div>
+        </template>
 
-      <!-- 页面对象详情和设计器 -->
-      <div class="right-panel">
+        <template #second>
+          <!-- 页面对象详情和设计器 -->
+          <div class="right-panel">
         <div v-if="selectedPageObject" class="page-object-detail">
           <div class="detail-header">
             <h3>{{ selectedPageObject.name }}</h3>
@@ -229,7 +233,9 @@
         <div v-else class="no-page-object">
           <el-empty :description="$t('uiAutomation.pageObject.selectPageObjectToEdit')" />
         </div>
-      </div>
+          </div>
+        </template>
+      </ResizableSplitPane>
     </div>
 
     <!-- 新增页面对象对话框 -->
@@ -298,6 +304,7 @@
 </template>
 
 <script setup>
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -321,6 +328,7 @@ import {
 } from '@/api/ui_automation'
 
 const { t } = useI18n()
+const leftPanelWidth = ref(350)
 
 // 响应式数据
 const projects = ref([])
@@ -771,7 +779,7 @@ onMounted(async () => {
 }
 
 .left-panel {
-  width: 350px;
+  width: 100%;
   border-right: 1px solid #e6e6e6;
   display: flex;
   flex-direction: column;
@@ -779,6 +787,7 @@ onMounted(async () => {
 
 .right-panel {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
