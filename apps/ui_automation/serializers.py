@@ -187,13 +187,14 @@ class TestScriptSerializer(serializers.ModelSerializer):
 class TestScriptCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestScript
-        fields = ('project', 'name', 'description', 'script_type', 'content', 'language', 'framework')
+        fields = ('project', 'name', 'description', 'script_type', 'content', 'language', 'framework',
+                  'source', 'start_url', 'recording_config', 'analysis')
 
 
 class TestScriptUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestScript
-        fields = ('name', 'description', 'script_type', 'content')
+        fields = ('name', 'description', 'script_type', 'content', 'start_url', 'recording_config')
 
 
 class TestSuiteScriptSerializer(serializers.ModelSerializer):

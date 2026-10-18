@@ -2,7 +2,7 @@
   <div class="project-center">
     <div class="page-header">
       <div>
-        <h1>项目中心</h1>
+        <h1>项目列表</h1>
         <p>统一管理项目和已关联的测试模块</p>
       </div>
       <el-button type="primary" :icon="Plus" @click="openCreate">创建项目</el-button>
@@ -16,7 +16,7 @@
     </div>
 
     <div class="table-panel">
-      <div class="panel-title">项目中心</div>
+      <div class="panel-title">项目列表</div>
       <div class="filter-row">
         <el-input v-model="search" clearable placeholder="搜索项目名称" :prefix-icon="Search" @keyup.enter="loadProjects" />
         <el-select v-model="status" clearable placeholder="请选择状态" @change="loadProjects">
@@ -35,16 +35,18 @@
         </el-table-column>
         <el-table-column label="模块" min-width="260">
           <template #default="{ row }">
-            <el-tag
-              v-for="moduleKey in row.modules || []"
-              :key="moduleKey"
-              size="small"
-              class="module-tag"
-              :style="{ color: moduleMeta(moduleKey).color, backgroundColor: `${moduleMeta(moduleKey).color}18` }"
-            >
-              <el-icon><component :is="moduleMeta(moduleKey).icon" /></el-icon>
-              {{ moduleMeta(moduleKey).label }}
-            </el-tag>
+            <div class="module-tags">
+              <el-tag
+                v-for="moduleKey in row.modules || []"
+                :key="moduleKey"
+                size="small"
+                class="module-tag"
+                :style="{ color: moduleMeta(moduleKey).color, backgroundColor: `${moduleMeta(moduleKey).color}18` }"
+              >
+                <el-icon><component :is="moduleMeta(moduleKey).icon" /></el-icon>
+                <span>{{ moduleMeta(moduleKey).label }}</span>
+              </el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="负责人" width="120"><template #default="{ row }">{{ row.owner?.username || '-' }}</template></el-table-column>
@@ -240,7 +242,11 @@ onMounted(() => { loadProjects(); loadUsers() })
 .summary-item { display: flex; align-items: center; gap: 10px; min-height: 68px; padding: 12px 14px; background: #fff; border: 1px solid #edf0f5; border-radius: 6px; box-shadow: 0 2px 8px rgba(38, 52, 77, .04); }
 .summary-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; color: #fff; }
 .summary-item strong { display: block; font-size: 20px; line-height: 1; }.summary-item span { display: block; margin-top: 6px; color: #9099a8; font-size: 11px; white-space: nowrap; }
-.table-panel { padding: 18px; background: #fff; border: 1px solid #edf0f5; box-shadow: 0 2px 10px rgba(38, 52, 77, .04); }.panel-title { margin-bottom: 16px; font-weight: 600; }.filter-row { display: flex; gap: 10px; margin-bottom: 14px; }.filter-row .el-input { width: 240px; }.filter-row .el-select { width: 150px; }.el-pagination { justify-content: flex-end; margin-top: 16px; }.module-tag { display: inline-flex; align-items: center; gap: 3px; margin: 2px 4px 2px 0; border: 0; }.form-section { padding: 12px 14px; border: 1px solid #edf0f5; border-radius: 6px; margin-bottom: 14px; }.module-section { background: #f8fbff; }.section-title { margin-bottom: 14px; font-weight: 600; }.section-title small { margin-left: 8px; color: #9aa4b3; font-weight: 400; }.module-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }.module-card { display: flex; flex-direction: column; align-items: center; gap: 7px; min-height: 92px; padding: 12px 6px; border: 1px solid #e8edf5; border-radius: 7px; background: #fff; cursor: pointer; }.module-card.selected { border-color: #409eff; box-shadow: 0 0 0 1px #409eff inset; background: #f5faff; }.module-card span { font-size: 12px; color: #364152; }.module-card em { padding: 2px 8px; border-radius: 10px; background: #f1f3f6; color: #8993a2; font-size: 11px; font-style: normal; }.module-card.selected em { background: #409eff; color: #fff; }.module-config { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 10px 12px; background: #fff; border-radius: 5px; color: #667085; }.module-config .el-select, .module-config .el-input { max-width: 360px; }
+.module-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 0; }
+.module-tag { flex-shrink: 0; margin: 0; border: 0; white-space: nowrap; }
+.module-tag :deep(.el-tag__content) { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.module-tag .el-icon { flex-shrink: 0; }
+.table-panel { padding: 18px; background: #fff; border: 1px solid #edf0f5; box-shadow: 0 2px 10px rgba(38, 52, 77, .04); }.panel-title { margin-bottom: 16px; font-weight: 600; }.filter-row { display: flex; gap: 10px; margin-bottom: 14px; }.filter-row .el-input { width: 240px; }.filter-row .el-select { width: 150px; }.el-pagination { justify-content: flex-end; margin-top: 16px; }.form-section { padding: 12px 14px; border: 1px solid #edf0f5; border-radius: 6px; margin-bottom: 14px; }.module-section { background: #f8fbff; }.section-title { margin-bottom: 14px; font-weight: 600; }.section-title small { margin-left: 8px; color: #9aa4b3; font-weight: 400; }.module-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }.module-card { display: flex; flex-direction: column; align-items: center; gap: 7px; min-height: 92px; padding: 12px 6px; border: 1px solid #e8edf5; border-radius: 7px; background: #fff; cursor: pointer; }.module-card.selected { border-color: #409eff; box-shadow: 0 0 0 1px #409eff inset; background: #f5faff; }.module-card span { font-size: 12px; color: #364152; }.module-card em { padding: 2px 8px; border-radius: 10px; background: #f1f3f6; color: #8993a2; font-size: 11px; font-style: normal; }.module-card.selected em { background: #409eff; color: #fff; }.module-config { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 10px 12px; background: #fff; border-radius: 5px; color: #667085; }.module-config .el-select, .module-config .el-input { max-width: 360px; }
  .member-dialog-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; font-weight: 600; }.owner-label { color: #98a2b3; font-size: 12px; }.user-email { float: right; margin-left: 16px; color: #9aa4b3; font-size: 12px; }
 @media (max-width: 1100px) { .summary-grid { grid-template-columns: repeat(3, 1fr); }.module-grid { grid-template-columns: repeat(3, 1fr); } }
 </style>
