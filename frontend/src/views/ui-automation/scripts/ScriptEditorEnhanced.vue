@@ -66,6 +66,10 @@
               <div class="center-panel">
         <div class="editor-toolbar">
           <div class="toolbar-left">
+            <el-button size="small" type="primary" plain @click="startRecording">
+              <el-icon><VideoPlay /></el-icon>
+              {{ $t('uiAutomation.recording.start') }}
+            </el-button>
             <el-select v-model="scriptLanguage" size="small" style="width: 120px">
               <el-option label="JavaScript" value="javascript" />
               <el-option label="Python" value="python" />
@@ -84,6 +88,10 @@
               <el-icon><Delete /></el-icon>
               {{ $t('uiAutomation.scriptEditor.clear') }}
             </el-button>
+            <el-button size="small" type="primary" plain @click="openReplay">
+              <el-icon><VideoPlay /></el-icon>
+              {{ $t('uiAutomation.replay.button') }}
+            </el-button>
             <el-button size="small" type="primary" @click="saveScript" :loading="saving">
               <el-icon><Check /></el-icon>
               {{ $t('uiAutomation.scriptEditor.saveScript') }}
@@ -92,15 +100,7 @@
         </div>
 
         <div class="code-editor-container">
-          <textarea
-            ref="codeEditor"
-            v-model="scriptContent"
-            class="code-editor"
-            :placeholder="$t('uiAutomation.scriptEditor.editorPlaceholder')"
-            @focus="handleEditorFocus"
-            @blur="handleEditorBlur"
-            @input="handleContentChange"
-          />
+          <div ref="codeEditor" class="code-editor" />
         </div>
 
         <div class="editor-status">
@@ -180,21 +180,32 @@
         </template>
       </ResizableSplitPane>
     </div>
+    <RecordingWizard v-model:visible="recordingVisible" :project-id="projectId" @imported="handleImportedScript" />
+    <ScriptReplayDialog v-model:visible="replayVisible" :script="currentScript" />
   </div>
 </template>
 
 <script setup>
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
+import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
+import 'monaco-editor/esm/vs/editor/browser/widget/codeEditor/editor.css'
 import {
-  Search, Plus, View, Document, Check, Delete, Operation, Folder
+  Search, Plus, View, Document, Check, Delete, Operation, Folder, VideoPlay
 } from '@element-plus/icons-vue'
+import RecordingWizard from './RecordingWizard.vue'
+import ScriptReplayDialog from './ScriptReplayDialog.vue'
 
 import {
   getUiProjects,
   createTestScript,
+  getTestScriptDetail,
+  updateTestScript,
   getElementTree,
   getElementGroupTree,
   validateElementLocator
@@ -202,6 +213,7 @@ import {
 
 // i18n
 const { t } = useI18n()
+const route = useRoute()
 
 // 响应式数据
 const projects = ref([])
@@ -211,6 +223,10 @@ const detailsPanelWidth = ref(350)
 const scriptContent = ref('')
 const scriptLanguage = ref('python')
 const scriptFramework = ref('playwright')
+const scriptId = ref(null)
+const scriptName = ref('')
+const recordingVisible = ref(false)
+const replayVisible = ref(false)
 
 const elementTree = ref([])
 const elementFilter = ref('')
@@ -225,6 +241,56 @@ const rightActiveTab = ref('logs')
 
 // Monaco编辑器实例
 const codeEditor = ref(null)
+let editorInstance = null
+let syncingEditor = false
+
+const currentScript = computed(() => projectId.value && scriptContent.value.trim() ? {
+  id: scriptId.value || undefined,
+  name: scriptName.value,
+  content: scriptContent.value,
+  language: scriptLanguage.value,
+  framework: scriptFramework.value,
+  project: projects.value.find(project => project.id === projectId.value),
+  start_url: ''
+} : null)
+
+const updateEditorLanguage = () => {
+  if (!editorInstance?.getModel()) return
+  monaco.editor.setModelLanguage(editorInstance.getModel(), scriptLanguage.value === 'javascript' ? 'javascript' : 'python')
+}
+
+const syncEditorValue = value => {
+  if (!editorInstance || editorInstance.getValue() === value) return
+  syncingEditor = true
+  editorInstance.setValue(value || '')
+  syncingEditor = false
+  updateCursorPosition()
+}
+
+const createCodeEditor = () => {
+  if (!codeEditor.value) return
+  editorInstance = monaco.editor.create(codeEditor.value, {
+    value: scriptContent.value,
+    language: scriptLanguage.value === 'javascript' ? 'javascript' : 'python',
+    theme: 'vs-dark',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontSize: 14,
+    lineHeight: 22,
+    padding: { top: 14, bottom: 14 },
+    tabSize: 4,
+    wordWrap: 'on',
+    scrollBeyondLastLine: false,
+    renderLineHighlight: 'line',
+  })
+  editorInstance.onDidChangeModelContent(() => {
+    if (syncingEditor) return
+    scriptContent.value = editorInstance.getValue()
+    updateCursorPosition()
+  })
+  editorInstance.onDidChangeCursorPosition(updateCursorPosition)
+  updateCursorPosition()
+}
 
 // 方法定义
 const loadProjects = async () => {
@@ -313,29 +379,20 @@ const countElements = (tree) => {
   return count
 }
 
-const handleEditorFocus = () => {
-  // 编辑器获得焦点时的处理
-}
-
-const handleEditorBlur = () => {
-  // 编辑器失去焦点时的处理
-}
-
 const handleContentChange = () => {
-  // 内容变化时更新状态
+  if (editorInstance && editorInstance.getValue() !== scriptContent.value) {
+    syncEditorValue(scriptContent.value)
+  }
   updateCursorPosition()
 }
 
 const updateCursorPosition = () => {
-  if (codeEditor.value) {
-    const textarea = codeEditor.value
-    const text = textarea.value
-    const selectionStart = textarea.selectionStart
-
-    // 计算行号和列号
-    const lines = text.substring(0, selectionStart).split('\n')
-    cursorPosition.line = lines.length
-    cursorPosition.column = lines[lines.length - 1].length + 1
+  if (editorInstance) {
+    const position = editorInstance.getPosition()
+    if (position) {
+      cursorPosition.line = position.lineNumber
+      cursorPosition.column = position.column
+    }
   }
 }
 
@@ -343,10 +400,33 @@ const onProjectChange = async () => {
   selectedElementDetail.value = null
   executionLogs.value = []
   scriptContent.value = ''
+  scriptId.value = null
+  scriptName.value = ''
+  syncEditorValue('')
 
   await loadElementTree()
 
-  // 代码编辑器已更新(使用 textarea)
+}
+
+const startRecording = () => {
+  if (!projectId.value) {
+    ElMessage.warning(t('uiAutomation.scriptEditor.messages.selectProject'))
+    return
+  }
+  recordingVisible.value = true
+}
+
+const handleImportedScript = async script => {
+  scriptId.value = script.id
+  scriptName.value = script.name || ''
+  projectId.value = script.project?.id || projectId.value
+  scriptContent.value = script.content || ''
+  scriptLanguage.value = 'python'
+  scriptFramework.value = 'playwright'
+  syncEditorValue(scriptContent.value)
+  updateEditorLanguage()
+  await loadElementTree()
+  addLog('success', `${t('uiAutomation.recording.importSuccess')}: ${script.name}`)
 }
 
 const filterElementNode = (value, data) => {
@@ -376,23 +456,11 @@ const insertElementCode = (element) => {
 }
 
 const insertCodeAtCursor = (code) => {
-  if (!codeEditor.value) return
-
-  const textarea = codeEditor.value
-  const start = textarea.selectionStart
-  const end = textarea.selectionEnd
-  const text = textarea.value
-
-  // 在光标位置插入代码
-  const newText = text.substring(0, start) + code + text.substring(end)
-  scriptContent.value = newText
-
-  // 更新光标位置
-  setTimeout(() => {
-    textarea.focus()
-    textarea.setSelectionRange(start + code.length, start + code.length)
-    updateCursorPosition()
-  }, 0)
+  if (!editorInstance) return
+  const selection = editorInstance.getSelection() || editorInstance.getModel().getFullModelRange()
+  editorInstance.executeEdits('element-library', [{ range: selection, text: code, forceMoveMarkers: true }])
+  editorInstance.focus()
+  updateCursorPosition()
 }
 
 const generateElementCode = (element) => {
@@ -440,34 +508,44 @@ const generateScriptName = () => {
 const saveScript = async () => {
   if (!projectId.value) {
     ElMessage.warning(t('uiAutomation.scriptEditor.messages.selectProject'))
-    return
+    return false
   }
 
   if (!scriptContent.value.trim()) {
     ElMessage.warning(t('uiAutomation.scriptEditor.messages.emptyScript'))
-    return
+    return false
   }
 
   try {
     saving.value = true
 
-    const scriptName = generateScriptName()
-
-    await createTestScript({
-      name: scriptName,
+    const generatedName = scriptName.value || generateScriptName()
+    const payload = {
+      name: generatedName,
       project: projectId.value,
       script_type: 'CODE',
       content: scriptContent.value,
       language: scriptLanguage.value,
       framework: scriptFramework.value
-    })
+    }
+    if (scriptId.value) {
+      delete payload.project
+      delete payload.name
+      await updateTestScript(scriptId.value, payload)
+    } else {
+      const response = await createTestScript(payload)
+      scriptId.value = response.data?.id || null
+      scriptName.value = generatedName
+    }
 
-    ElMessage.success(`${t('uiAutomation.scriptEditor.messages.saveSuccess')}: ${scriptName}`)
-    addLog('success', `${t('uiAutomation.scriptEditor.messages.saveSuccess')}: ${scriptName}`)
+    ElMessage.success(`${t('uiAutomation.scriptEditor.messages.saveSuccess')}: ${generatedName}`)
+    addLog('success', `${t('uiAutomation.scriptEditor.messages.saveSuccess')}: ${generatedName}`)
+    return true
   } catch (error) {
     console.error('Failed to save script:', error)
     ElMessage.error(t('uiAutomation.scriptEditor.messages.saveFailed'))
     addLog('error', t('uiAutomation.scriptEditor.messages.saveFailed'))
+    return false
   } finally {
     saving.value = false
   }
@@ -503,6 +581,7 @@ const formatCode = () => {
         .replace(/\n\s*\n/g, '\n')
 
       scriptContent.value = formatted
+      syncEditorValue(formatted)
       addLog('info', t('uiAutomation.scriptEditor.messages.codeFormatted'))
     } else {
       addLog('info', t('uiAutomation.scriptEditor.messages.formatInProgress'))
@@ -514,7 +593,24 @@ const formatCode = () => {
 
 const clearCode = () => {
   scriptContent.value = ''
+  syncEditorValue('')
   addLog('info', t('uiAutomation.scriptEditor.messages.codeCleared'))
+}
+
+const openReplay = async () => {
+  if (scriptLanguage.value !== 'python' || scriptFramework.value !== 'playwright') {
+    ElMessage.warning(t('uiAutomation.replay.pythonPlaywrightOnly'))
+    return
+  }
+  if (!projectId.value) {
+    ElMessage.warning(t('uiAutomation.common.selectProject'))
+    return
+  }
+  if (!scriptContent.value.trim()) {
+    ElMessage.warning(t('uiAutomation.scriptEditor.messages.emptyScript'))
+    return
+  }
+  replayVisible.value = true
 }
 
 const clearLogs = () => {
@@ -572,18 +668,29 @@ watch(scriptLanguage, (newLang) => {
 
 // 组件挂载
 onMounted(async () => {
+  createCodeEditor()
   await loadProjects()
 
-  if (projects.value.length > 0) {
+  if (route.query.scriptId) {
+    try {
+      const response = await getTestScriptDetail(route.query.scriptId)
+      await handleImportedScript(response.data)
+    } catch (error) {
+      ElMessage.error(t('uiAutomation.scriptEditor.messages.loadScriptFailed'))
+    }
+  } else if (projects.value.length > 0) {
     projectId.value = projects.value[0].id
     await onProjectChange()
   }
 
-  // 为textarea添加事件监听
-  if (codeEditor.value) {
-    codeEditor.value.addEventListener('click', updateCursorPosition)
-    codeEditor.value.addEventListener('keyup', updateCursorPosition)
-  }
+})
+
+watch(scriptLanguage, updateEditorLanguage)
+watch(scriptContent, handleContentChange)
+
+onBeforeUnmount(() => {
+  editorInstance?.dispose()
+  editorInstance = null
 })
 </script>
 
@@ -690,6 +797,12 @@ onMounted(async () => {
 
 .toolbar-left,
 .toolbar-right {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.toolbar-left,
+.toolbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -703,16 +816,7 @@ onMounted(async () => {
 .code-editor {
   width: 100%;
   height: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 14px;
-  line-height: 1.5;
-  padding: 15px;
-  background-color: #1e1e1e;
-  color: #d4d4d4;
-  tab-size: 2;
+  min-height: 0;
 }
 
 .editor-status {

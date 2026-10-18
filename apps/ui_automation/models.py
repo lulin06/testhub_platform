@@ -213,6 +213,15 @@ class TestScript(models.Model):
     content = models.TextField(verbose_name='脚本内容')  # 可以是代码或JSON格式的低代码配置
     language = models.CharField(max_length=20, choices=LANGUAGE_CHOICES, verbose_name='脚本语言', default='python', blank=True)
     framework = models.CharField(max_length=20, choices=FRAMEWORK_CHOICES, verbose_name='执行框架', default='playwright', blank=True)
+    SOURCE_CHOICES = [
+        ('manual', '手工创建'),
+        ('recorded', 'Playwright录制'),
+        ('imported', '导入'),
+    ]
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='manual', verbose_name='脚本来源')
+    start_url = models.URLField(blank=True, verbose_name='录制起始URL')
+    recording_config = models.JSONField(default=dict, blank=True, verbose_name='录制配置')
+    analysis = models.JSONField(default=dict, blank=True, verbose_name='脚本分析结果')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -515,6 +524,14 @@ class TestExecution(models.Model):
     engine = models.CharField(max_length=20, default='playwright', verbose_name='测试引擎')
     browser = models.CharField(max_length=20, default='chrome', verbose_name='浏览器')
     headless = models.BooleanField(default=False, verbose_name='无头模式')
+    EXECUTION_TYPE_CHOICES = [
+        ('legacy', '传统执行'),
+        ('recorded_script', '录制脚本回放'),
+    ]
+    execution_type = models.CharField(max_length=30, choices=EXECUTION_TYPE_CHOICES, default='legacy', verbose_name='执行类型')
+    run_config = models.JSONField(default=dict, blank=True, verbose_name='回放配置')
+    execution_logs = models.TextField(blank=True, verbose_name='执行日志')
+    artifact_manifest = models.JSONField(default=list, blank=True, verbose_name='执行产物')
 
     # 结果数据
     result_data = models.JSONField(blank=True, null=True, verbose_name='执行结果数据')

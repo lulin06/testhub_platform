@@ -163,6 +163,63 @@ export function deleteTestScript(id) {
   })
 }
 
+// Playwright 录制与脚本回放
+export function getRecordingCommand(data) {
+  return request({
+    url: '/ui-automation/test-scripts/recording-command/',
+    method: 'post',
+    data
+  })
+}
+
+export function importRecordedScript(data) {
+  return request({
+    url: '/ui-automation/test-scripts/import/',
+    method: 'post',
+    data
+  })
+}
+
+export function runRecordedScript(id, data) {
+  return request({
+    url: `/ui-automation/test-scripts/${id}/run/`,
+    method: 'post',
+    data,
+    timeout: 15000
+  })
+}
+
+export function runUnsavedRecordedScript(data) {
+  return request({
+    url: '/ui-automation/test-scripts/run-unsaved/',
+    method: 'post',
+    data,
+    timeout: 15000
+  })
+}
+
+export function getScriptExecutions(id, params) {
+  return request({
+    url: `/ui-automation/test-scripts/${id}/executions/`,
+    method: 'get',
+    params
+  })
+}
+
+export function getTestExecutionLogs(id) {
+  return request({
+    url: `/ui-automation/test-executions/${id}/logs/`,
+    method: 'get'
+  })
+}
+
+export function abortTestScriptExecution(id) {
+  return request({
+    url: `/ui-automation/test-executions/${id}/abort/`,
+    method: 'post'
+  })
+}
+
 // 测试套件相关API
 
 // 获取测试套件列表

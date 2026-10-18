@@ -98,7 +98,7 @@
     <el-dialog
       v-model="showCreateDialog"
       :title="isEditing ? $t('uiAutomation.suite.editSuite') : $t('uiAutomation.suite.createSuite')"
-      width="900px"
+      width="1100px"
       :close-on-click-modal="false"
     >
       <el-form ref="createFormRef" :model="createForm" :rules="formRules" label-width="100px">
@@ -125,13 +125,25 @@
                   </template>
                 </el-input>
               </div>
+              <div class="panel-actions">
+                <el-button size="small" text type="primary" :icon="Check" :disabled="!addableTestCases.length" @click="addAllTestCases">
+                  {{ $t('uiAutomation.suite.addAll') }}
+                </el-button>
+                <el-button size="small" text type="success" :icon="Plus" :disabled="!checkedTestCases.length" @click="addCheckedTestCases">
+                  {{ $t('uiAutomation.suite.addChecked') }}
+                </el-button>
+              </div>
               <div class="panel-content">
                 <el-table
+                  ref="availableTableRef"
                   :data="filteredAvailableTestCases"
+                  row-key="id"
                   height="300"
                   @row-click="handleTestCaseRowClick"
+                  @selection-change="checkedTestCases = $event"
                   :row-class-name="getTestCaseRowClassName"
                 >
+                  <el-table-column type="selection" width="44" :selectable="isTestCaseAddable" />
                   <el-table-column prop="name" :label="$t('uiAutomation.suite.caseName')" min-width="150" show-overflow-tooltip />
                   <el-table-column prop="priority" :label="$t('uiAutomation.suite.priority')" width="80">
                     <template #default="{ row }">
@@ -149,7 +161,7 @@
                   </el-table-column>
                   <el-table-column :label="$t('uiAutomation.common.operation')" width="80">
                     <template #default="{ row }">
-                      <el-button size="small" text @click.stop="addTestCase(row)">
+                      <el-button size="small" text :disabled="!isTestCaseAddable(row)" @click.stop="addTestCase(row)">
                         <el-icon><ArrowRight /></el-icon>
                       </el-button>
                     </template>
@@ -162,11 +174,24 @@
               <div class="panel-header">
                 <h4>{{ $t('uiAutomation.suite.selectedCases') }} ({{ selectedTestCases.length }})</h4>
               </div>
+              <div class="panel-actions">
+                <el-button size="small" text type="danger" :icon="Delete" :disabled="!selectedTestCases.length" @click="clearSelectedTestCases">
+                  {{ $t('uiAutomation.suite.clearSelected') }}
+                </el-button>
+                <el-button size="small" text type="warning" :icon="Minus" :disabled="!checkedSelectedTestCases.length" @click="removeCheckedTestCases">
+                  {{ $t('uiAutomation.suite.removeChecked') }}
+                </el-button>
+              </div>
               <div class="panel-content">
                 <el-table
+                  ref="selectedTableRef"
                   :data="selectedTestCases"
+                  row-key="id"
                   height="300"
+                  @selection-change="checkedSelectedTestCases = $event"
+                  @row-click="handleSelectedTestCaseRowClick"
                 >
+                  <el-table-column type="selection" width="44" />
                   <el-table-column prop="name" :label="$t('uiAutomation.suite.caseName')" min-width="150" show-overflow-tooltip />
                   <el-table-column prop="priority" :label="$t('uiAutomation.suite.priority')" width="80">
                     <template #default="{ row }">
@@ -177,30 +202,32 @@
                   </el-table-column>
                   <el-table-column :label="$t('uiAutomation.common.operation')" width="120">
                     <template #default="{ row, $index }">
-                      <el-button
-                        size="small"
-                        text
-                        @click="moveUp($index)"
-                        :disabled="$index === 0"
-                      >
-                        <el-icon><Top /></el-icon>
-                      </el-button>
-                      <el-button
-                        size="small"
-                        text
-                        @click="moveDown($index)"
-                        :disabled="$index === selectedTestCases.length - 1"
-                      >
-                        <el-icon><Bottom /></el-icon>
-                      </el-button>
-                      <el-button
-                        size="small"
-                        text
-                        type="danger"
-                        @click="removeTestCase($index)"
-                      >
-                        <el-icon><Delete /></el-icon>
-                      </el-button>
+                      <div class="selected-case-actions">
+                        <el-button
+                          size="small"
+                          text
+                          @click.stop="moveUp($index)"
+                          :disabled="$index === 0"
+                        >
+                          <el-icon><Top /></el-icon>
+                        </el-button>
+                        <el-button
+                          size="small"
+                          text
+                          @click.stop="moveDown($index)"
+                          :disabled="$index === selectedTestCases.length - 1"
+                        >
+                          <el-icon><Bottom /></el-icon>
+                        </el-button>
+                        <el-button
+                          size="small"
+                          text
+                          type="danger"
+                          @click.stop="removeTestCase($index)"
+                        >
+                          <el-icon><Delete /></el-icon>
+                        </el-button>
+                      </div>
                     </template>
                   </el-table-column>
                 </el-table>
@@ -258,11 +285,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Search, Edit, Delete, RefreshRight, Collection,
-  ArrowRight, Top, Bottom
+  ArrowRight, Top, Bottom, Check, Minus
 } from '@element-plus/icons-vue'
 import {
   getUiProjects,
@@ -316,6 +343,12 @@ const formRules = computed(() => ({
 const availableTestCases = ref([])
 const selectedTestCases = ref([])
 const testCaseSearchText = ref('')
+const availableTableRef = ref(null)
+const checkedTestCases = ref([])
+const selectedTableRef = ref(null)
+const checkedSelectedTestCases = ref([])
+const selectedTestCaseIds = computed(() => new Set(selectedTestCases.value.map(tc => tc.id)))
+const isTestCaseAddable = (testCase) => !selectedTestCaseIds.value.has(testCase.id)
 
 // 运行配置
 const runConfig = reactive({
@@ -335,6 +368,14 @@ const filteredAvailableTestCases = computed(() => {
     (tc.description && tc.description.toLowerCase().includes(testCaseSearchText.value.toLowerCase()))
   )
 })
+const addableTestCases = computed(() => filteredAvailableTestCases.value.filter(isTestCaseAddable))
+
+const clearCheckedTestCases = () => {
+  availableTableRef.value?.clearSelection()
+  checkedTestCases.value = []
+}
+
+watch(testCaseSearchText, clearCheckedTestCases)
 
 // 加载项目列表
 const loadProjects = async () => {
@@ -381,14 +422,20 @@ const loadSuites = async () => {
 
 // 加载可用测试用例
 const loadAvailableTestCases = async () => {
+  availableTestCases.value = []
   if (!projectId.value) return
 
   try {
-    const response = await getTestCases({
-      project: projectId.value,
-      page_size: 1000  // 加载所有用例
-    })
-    availableTestCases.value = response.data.results || response.data
+    const cases = []
+    let page = 1
+    let hasNext = true
+    while (hasNext) {
+      const response = await getTestCases({ project: projectId.value, page, page_size: 1000 })
+      cases.push(...(response.data.results || response.data))
+      hasNext = Boolean(response.data.next)
+      page++
+    }
+    availableTestCases.value = cases
   } catch (error) {
     console.error('获取测试用例列表失败:', error)
     ElMessage.error(t('uiAutomation.suite.messages.loadCasesFailed'))
@@ -442,33 +489,30 @@ const handleCreate = async () => {
       // 更新套件
       await updateTestSuite(currentSuiteId.value, suiteData)
       suiteId = currentSuiteId.value
-      ElMessage.success(t('uiAutomation.suite.messages.updateSuccess'))
     } else {
       // 创建套件
       const response = await createTestSuite(suiteData)
       suiteId = response.data.id
-      ElMessage.success(t('uiAutomation.suite.messages.createSuccess'))
     }
 
     // 保存测试用例关联
-    if (selectedTestCases.value.length > 0) {
-      // 清除旧的关联（如果是编辑模式）
-      if (isEditing.value) {
-        const existingTestCases = await getTestSuiteTestCases(suiteId)
-        for (const tc of existingTestCases.data) {
-          await removeTestCaseFromTestSuite(suiteId, tc.test_case.id)
-        }
-      }
-
-      // 添加新的关联
-      for (let i = 0; i < selectedTestCases.value.length; i++) {
-        await addTestCaseToTestSuite(suiteId, {
-          test_case_id: selectedTestCases.value[i].id,
-          order: i
-        })
+    // 编辑时即使已选用例为空，也需要清除旧关联。
+    if (isEditing.value) {
+      const existingTestCases = await getTestSuiteTestCases(suiteId)
+      for (const tc of existingTestCases.data) {
+        await removeTestCaseFromTestSuite(suiteId, tc.test_case.id)
       }
     }
 
+    // 添加新的关联
+    for (let i = 0; i < selectedTestCases.value.length; i++) {
+      await addTestCaseToTestSuite(suiteId, {
+        test_case_id: selectedTestCases.value[i].id,
+        order: i
+      })
+    }
+
+    ElMessage.success(t(isEditing.value ? 'uiAutomation.suite.messages.updateSuccess' : 'uiAutomation.suite.messages.createSuccess'))
     showCreateDialog.value = false
     await loadSuites()
     resetForm()
@@ -487,6 +531,7 @@ const editSuite = async (id) => {
     const suites_data = suites.value.find(s => s.id === id)
     if (!suites_data) return
 
+    resetForm()
     currentSuiteId.value = id
     isEditing.value = true
     createForm.name = suites_data.name
@@ -494,7 +539,7 @@ const editSuite = async (id) => {
 
     // 加载已选测试用例
     const response = await getTestSuiteTestCases(id)
-    selectedTestCases.value = response.data.map(item => item.test_case).sort((a, b) => a.order - b.order)
+    selectedTestCases.value = [...response.data].sort((a, b) => a.order - b.order).map(item => item.test_case)
 
     // 加载可用测试用例
     await loadAvailableTestCases()
@@ -610,9 +655,9 @@ const pollSuiteStatus = (suiteId) => {
 }
 
 // 测试用例管理方法
-const handleTestCaseRowClick = (row) => {
-  // 双击添加测试用例
-  addTestCase(row)
+const handleTestCaseRowClick = (row, column) => {
+  if (column.type === 'selection' || !isTestCaseAddable(row)) return
+  availableTableRef.value?.toggleRowSelection(row)
 }
 
 const getTestCaseRowClassName = ({ row }) => {
@@ -627,10 +672,52 @@ const addTestCase = (testCase) => {
     return
   }
   selectedTestCases.value.push({ ...testCase })
+  availableTableRef.value?.toggleRowSelection(testCase, false)
+}
+
+const addTestCases = (testCases) => {
+  const ids = new Set(selectedTestCaseIds.value)
+  for (const testCase of testCases) {
+    if (ids.has(testCase.id)) continue
+    selectedTestCases.value.push({ ...testCase })
+    ids.add(testCase.id)
+  }
+  clearCheckedTestCases()
+}
+
+// 搜索时仅添加当前筛选结果，已有用例及其顺序保持不变。
+const addAllTestCases = () => addTestCases(addableTestCases.value)
+const addCheckedTestCases = () => {
+  const checkedIds = new Set(checkedTestCases.value.map(tc => tc.id))
+  addTestCases(addableTestCases.value.filter(tc => checkedIds.has(tc.id)))
 }
 
 const removeTestCase = (index) => {
+  const testCase = selectedTestCases.value[index]
+  selectedTableRef.value?.toggleRowSelection(testCase, false)
+  checkedSelectedTestCases.value = checkedSelectedTestCases.value.filter(tc => tc.id !== testCase.id)
   selectedTestCases.value.splice(index, 1)
+}
+
+const clearSelectedChecks = () => {
+  selectedTableRef.value?.clearSelection()
+  checkedSelectedTestCases.value = []
+}
+
+const clearSelectedTestCases = () => {
+  selectedTestCases.value = []
+  clearSelectedChecks()
+}
+
+const removeCheckedTestCases = () => {
+  const checkedIds = new Set(checkedSelectedTestCases.value.map(tc => tc.id))
+  selectedTestCases.value = selectedTestCases.value.filter(tc => !checkedIds.has(tc.id))
+  clearSelectedChecks()
+}
+
+const handleSelectedTestCaseRowClick = (row, column) => {
+  if (column.type === 'selection') return
+  selectedTableRef.value?.toggleRowSelection(row)
 }
 
 const moveUp = (index) => {
@@ -651,6 +738,8 @@ const moveDown = (index) => {
 
 // 重置表单
 const resetForm = () => {
+  clearCheckedTestCases()
+  clearSelectedChecks()
   createForm.name = ''
   createForm.description = ''
   selectedTestCases.value = []
@@ -810,6 +899,7 @@ const handleNewSuite = async () => {
 
 .selector-panel {
   flex: 1;
+  min-width: 0;
   border: 1px solid #dcdfe6;
   border-radius: 4px;
   overflow: hidden;
@@ -822,6 +912,8 @@ const handleNewSuite = async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 
   h4 {
     margin: 0;
@@ -830,8 +922,30 @@ const handleNewSuite = async () => {
   }
 }
 
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 4px 10px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #dcdfe6;
+}
+
 .panel-content {
   padding: 10px;
+}
+
+.selected-case-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+
+  .el-button {
+    flex: 0 0 28px;
+    width: 28px;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 

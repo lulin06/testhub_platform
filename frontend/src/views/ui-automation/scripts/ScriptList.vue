@@ -6,10 +6,21 @@
         <el-select v-model="selectedProject" :placeholder="$t('uiAutomation.common.selectProject')" style="width: 200px; margin-right: 15px" @change="onProjectChange">
           <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
         </el-select>
-        <el-button type="primary" @click="goToScriptEditor">
+        <el-button type="primary" @click="openRecording">
           <el-icon><Plus /></el-icon>
-          {{ $t('uiAutomation.script.newScript') }}
+          {{ $t('uiAutomation.recording.recordScript') }}
         </el-button>
+        <el-button type="primary" plain :loading="uploadingScript" @click="openUpload">
+          <el-icon><Upload /></el-icon>
+          {{ $t('uiAutomation.script.uploadScript') }}
+        </el-button>
+        <input
+          ref="scriptFileInput"
+          class="script-file-input"
+          type="file"
+          accept=".py"
+          @change="handleScriptFileChange"
+        >
       </div>
     </div>
 
@@ -41,24 +52,31 @@
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column :label="$t('uiAutomation.script.operationColumn')" width="280" fixed="right">
+        <el-table-column :label="$t('uiAutomation.script.operationColumn')" width="410" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" text @click="viewScript(row)">
-              <el-icon><View /></el-icon>
-              {{ $t('uiAutomation.script.viewDetail') }}
-            </el-button>
-            <el-button size="small" text @click="editScript(row)">
-              <el-icon><Edit /></el-icon>
-              {{ $t('uiAutomation.script.edit') }}
-            </el-button>
-            <el-button size="small" text @click="renameScript(row)">
-              <el-icon><EditPen /></el-icon>
-              {{ $t('uiAutomation.script.rename') }}
-            </el-button>
-            <el-button size="small" text type="danger" @click="deleteScript(row)">
-              <el-icon><Delete /></el-icon>
-              {{ $t('uiAutomation.script.delete') }}
-            </el-button>
+            <div class="row-actions">
+              <el-button size="small" text type="primary" @click="replayScript(row)">
+                <el-icon><VideoPlay /></el-icon>
+                {{ $t('uiAutomation.replay.button') }}
+              </el-button>
+              <el-button size="small" text type="primary" @click="historyScript(row)">
+                <el-icon><Clock /></el-icon>
+                {{ $t('uiAutomation.history.button') }}
+              </el-button>
+              <el-button size="small" text @click="viewScript(row)">
+                <el-icon><View /></el-icon>
+                {{ $t('uiAutomation.script.viewDetail') }}
+              </el-button>
+              <el-button size="small" text @click="editScript(row)">
+                <el-icon><Edit /></el-icon>
+                {{ $t('uiAutomation.script.edit') }}
+              </el-button>
+              <el-tooltip :content="$t('uiAutomation.script.delete')">
+                <el-button size="small" text type="danger" :aria-label="$t('uiAutomation.script.delete')" @click="deleteScript(row)">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -100,38 +118,20 @@
       </template>
     </el-dialog>
 
-    <!-- 重命名对话框 -->
-    <el-dialog v-model="showRenameDialog" :title="$t('uiAutomation.script.renameScript')" width="400px">
-      <el-form :model="renameForm" label-width="80px">
-        <el-form-item :label="$t('uiAutomation.script.newName')">
-          <el-input v-model="renameForm.newName" :placeholder="$t('uiAutomation.script.newNamePlaceholder')" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showRenameDialog = false">{{ $t('uiAutomation.common.cancel') }}</el-button>
-        <el-button type="primary" @click="confirmRename">{{ $t('uiAutomation.common.confirm') }}</el-button>
-      </template>
-    </el-dialog>
-
     <!-- 编辑对话框 -->
     <el-dialog v-model="showEditDialog" :title="$t('uiAutomation.script.editScript')" width="80%" :close-on-click-modal="false">
       <div v-if="editingScript" class="script-editor">
-        <div class="editor-header">
-          <span class="script-name">{{ editingScript.name }}</span>
-          <div class="editor-info">
-            <el-tag size="small" :type="editingScript.language === 'python' ? 'success' : 'primary'">
-              {{ getLanguageText(editingScript.language) }}
-            </el-tag>
-            <el-tag size="small" :type="editingScript.framework === 'playwright' ? 'warning' : 'info'" style="margin-left: 10px">
-              {{ getFrameworkText(editingScript.framework) }}
-            </el-tag>
-          </div>
-        </div>
+        <el-form label-position="top" class="edit-script-name">
+          <el-form-item :label="$t('uiAutomation.script.scriptName')">
+            <el-input v-model="editingScript.name" maxlength="200" show-word-limit />
+          </el-form-item>
+        </el-form>
         <div class="editor-container">
           <textarea
             v-model="editingScript.content"
             class="code-editor"
             :placeholder="$t('uiAutomation.script.scriptEditorPlaceholder')"
+            spellcheck="false"
           />
         </div>
       </div>
@@ -140,13 +140,17 @@
         <el-button type="primary" @click="saveEditedScript" :loading="saving">{{ $t('uiAutomation.script.save') }}</el-button>
       </template>
     </el-dialog>
+
+    <RecordingWizard v-model:visible="recordingVisible" :project-id="selectedProject" @imported="openImportedScript" />
+    <ScriptReplayDialog v-model:visible="replayVisible" :script="currentScript" />
+    <ScriptHistoryDialog v-model:visible="historyVisible" :script="currentScript" />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, View, Edit, Delete, EditPen } from '@element-plus/icons-vue'
+import { Plus, View, Edit, Delete, VideoPlay, Clock, Upload } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
@@ -154,8 +158,12 @@ import {
   getUiProjects,
   getTestScripts,
   updateTestScript,
-  deleteTestScript
+  deleteTestScript,
+  importRecordedScript
 } from '@/api/ui_automation'
+import RecordingWizard from './RecordingWizard.vue'
+import ScriptReplayDialog from './ScriptReplayDialog.vue'
+import ScriptHistoryDialog from './ScriptHistoryDialog.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -170,19 +178,17 @@ const total = ref(0)
 
 // 对话框控制
 const showDetailDialog = ref(false)
-const showRenameDialog = ref(false)
 const showEditDialog = ref(false)
+const recordingVisible = ref(false)
+const replayVisible = ref(false)
+const historyVisible = ref(false)
+const scriptFileInput = ref(null)
+const uploadingScript = ref(false)
 
 // 当前操作的脚本
 const currentScript = ref(null)
 const editingScript = ref(null)
 const saving = ref(false)
-
-// 重命名表单
-const renameForm = reactive({
-  scriptId: null,
-  newName: ''
-})
 
 // 加载项目列表
 const loadProjects = async () => {
@@ -241,9 +247,69 @@ const handleCurrentChange = async () => {
   await loadScripts()
 }
 
-// 跳转到脚本编辑器
-const goToScriptEditor = () => {
-  router.push('/ui-automation/scripts/editor')
+// 打开录制向导
+const openRecording = () => {
+  if (!selectedProject.value) {
+    ElMessage.warning(t('uiAutomation.scriptEditor.messages.selectProject'))
+    return
+  }
+  recordingVisible.value = true
+}
+
+const openUpload = () => {
+  if (!selectedProject.value) {
+    ElMessage.warning(t('uiAutomation.scriptEditor.messages.selectProject'))
+    return
+  }
+  scriptFileInput.value?.click()
+}
+
+const handleScriptFileChange = async event => {
+  const input = event.target
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  if (!file.name.toLowerCase().endsWith('.py')) {
+    ElMessage.warning(t('uiAutomation.recording.pythonFileOnly'))
+    return
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    ElMessage.warning(t('uiAutomation.recording.fileTooLarge'))
+    return
+  }
+
+  uploadingScript.value = true
+  try {
+    const content = await file.text()
+    await importRecordedScript({ project: selectedProject.value, name: file.name, content })
+    ElMessage.success(t('uiAutomation.recording.importSuccess'))
+    await loadScripts()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.error || t('uiAutomation.recording.importFailed'))
+  } finally {
+    uploadingScript.value = false
+  }
+}
+
+const openImportedScript = async script => {
+  await loadScripts()
+  router.push({ path: '/ui-automation/scripts/editor', query: { scriptId: script.id } })
+}
+
+const replayScript = script => {
+  currentScript.value = script
+  replayVisible.value = true
+}
+
+const historyScript = script => {
+  currentScript.value = script
+  historyVisible.value = true
+}
+
+const handleRowCommand = (command, script) => {
+  if (command === 'detail') viewScript(script)
+  if (command === 'edit') editScript(script)
+  if (command === 'delete') deleteScript(script)
 }
 
 // 查看脚本详情
@@ -254,19 +320,24 @@ const viewScript = (script) => {
 
 // 编辑脚本
 const editScript = (script) => {
-  editingScript.value = { ...script }
+  editingScript.value = { ...script, name: (script.name || '').replace(/\.py$/i, '') }
   showDetailDialog.value = false
   showEditDialog.value = true
 }
 
 // 保存编辑的脚本
 const saveEditedScript = async () => {
-  if (!editingScript.value) return
+  const name = editingScript.value?.name.trim().replace(/\.py$/i, '')
+  if (!editingScript.value || !name) {
+    ElMessage.warning(t('uiAutomation.script.messages.enterScriptName'))
+    return
+  }
 
   try {
     saving.value = true
 
     await updateTestScript(editingScript.value.id, {
+      name,
       content: editingScript.value.content
     })
 
@@ -280,36 +351,6 @@ const saveEditedScript = async () => {
     console.error('脚本保存失败:', error)
   } finally {
     saving.value = false
-  }
-}
-
-// 重命名脚本
-const renameScript = (script) => {
-  renameForm.scriptId = script.id
-  renameForm.newName = script.name
-  showRenameDialog.value = true
-}
-
-// 确认重命名
-const confirmRename = async () => {
-  if (!renameForm.newName.trim()) {
-    ElMessage.warning(t('uiAutomation.script.messages.enterNewName'))
-    return
-  }
-
-  try {
-    await updateTestScript(renameForm.scriptId, {
-      name: renameForm.newName
-    })
-
-    ElMessage.success(t('uiAutomation.script.messages.renameSuccess'))
-    showRenameDialog.value = false
-
-    // 重新加载脚本列表
-    await loadScripts()
-  } catch (error) {
-    ElMessage.error(t('uiAutomation.script.messages.renameFailed'))
-    console.error('重命名失败:', error)
   }
 }
 
@@ -407,6 +448,10 @@ onMounted(async () => {
   align-items: center;
 }
 
+.script-file-input {
+  display: none;
+}
+
 .main-content {
   flex: 1;
   padding: 20px;
@@ -418,6 +463,13 @@ onMounted(async () => {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .script-detail {
@@ -452,6 +504,8 @@ onMounted(async () => {
   flex-direction: column;
   height: 600px;
 }
+
+.edit-script-name { padding: 14px 15px 0; }
 
 .editor-header {
   display: flex;

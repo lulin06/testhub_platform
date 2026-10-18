@@ -3,6 +3,7 @@ from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
@@ -14,6 +15,8 @@ import json
 import re
 import random
 import time
+import shlex
+from urllib.parse import urlparse
 
 from .models import (
     UiProject, LocatorStrategy, Element, TestScript, TestSuite,
@@ -45,9 +48,20 @@ from .serializers import (
 )
 from .operation_logger import log_operation
 from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
+from .script_security import MAX_SCRIPT_BYTES, ScriptSecurityError, analyze_script
+from .script_runner import start_script_execution, stop_script_execution
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+
+def _request_bool(value, default=False):
+    """Parse JSON and multipart form boolean values consistently."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def extract_step_info(s, step_index):
@@ -634,6 +648,196 @@ class TestScriptViewSet(viewsets.ModelViewSet):
         ).distinct()
         return TestScript.objects.filter(project__in=accessible_projects)
 
+    @action(detail=False, methods=['post'], url_path='preflight')
+    def preflight(self, request):
+        """Run the same AST safety and replay-risk checks before execution."""
+        content = request.data.get('content')
+        if not isinstance(content, str) or not content.strip():
+            return Response({'error': '脚本内容不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            analysis = analyze_script(content)
+        except ScriptSecurityError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'content_hash': analysis['content_hash'],
+            'locator_count': analysis['locator_count'],
+            'start_url': analysis['start_url'],
+            'diagnostics': analysis['diagnostics'],
+        })
+
+    @action(detail=False, methods=['post'], url_path='recording-command')
+    def recording_command(self, request):
+        """Build the local Playwright codegen command used by the recording wizard."""
+        start_url = str(request.data.get('start_url', '')).strip()
+        browser = str(request.data.get('browser', 'chromium')).strip().lower()
+        if urlparse(start_url).scheme not in {'http', 'https'} or not urlparse(start_url).netloc:
+            return Response({'error': '请输入有效的http/https起始URL'}, status=status.HTTP_400_BAD_REQUEST)
+        if browser != 'chromium':
+            return Response({'error': '本期录制与回放仅支持Chromium'}, status=status.HTTP_400_BAD_REQUEST)
+
+        output_name = str(request.data.get('output_name') or 'testhub_recorded.py').strip()
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+\.py', output_name):
+            output_name = 'testhub_recorded.py'
+        target = 'python'
+        install_command = f'python -m pip install playwright && python -m playwright install {browser}'
+        command_parts = [
+            'playwright', 'codegen', start_url,
+            '--target=' + target,
+            '--browser=' + browser,
+            '--output=' + output_name,
+            '--ignore-https-errors',
+        ]
+        if request.data.get('save_storage'):
+            command_parts.extend(['--save-storage=storage_state.json'])
+        return Response({
+            'install_command': install_command,
+            'record_command': ' '.join(shlex.quote(part) for part in command_parts),
+            'output_name': output_name,
+            'language': 'python',
+            'framework': 'playwright',
+        })
+
+    @action(detail=False, methods=['post'], url_path='import', parser_classes=[JSONParser, FormParser, MultiPartParser])
+    def import_script(self, request):
+        """Validate and persist a Python Playwright recording."""
+        project_id = request.data.get('project') or request.data.get('project_id')
+        if not project_id:
+            return Response({'error': '请选择项目'}, status=status.HTTP_400_BAD_REQUEST)
+        user = request.user
+        project = UiProject.objects.filter(
+            pk=project_id,
+        ).filter(models.Q(owner=user) | models.Q(members=user)).distinct().first()
+        if not project:
+            return Response({'error': '项目不存在或无权访问'}, status=status.HTTP_404_NOT_FOUND)
+
+        uploaded = request.FILES.get('file')
+        if uploaded:
+            if uploaded.size > MAX_SCRIPT_BYTES:
+                return Response({'error': '脚本文件不能超过2MB'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                content = uploaded.read().decode('utf-8')
+            except UnicodeDecodeError:
+                return Response({'error': '脚本必须使用UTF-8编码'}, status=status.HTTP_400_BAD_REQUEST)
+            default_name = uploaded.name.rsplit('/', 1)[-1]
+        else:
+            content = str(request.data.get('content') or '')
+            default_name = 'testhub_recorded.py'
+        if not content.strip():
+            return Response({'error': '请上传或粘贴Python脚本'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            analysis = analyze_script(content)
+        except (UnicodeDecodeError, ScriptSecurityError) as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        name = str(request.data.get('name') or default_name).strip()[:200]
+        script = TestScript.objects.create(
+            project=project,
+            name=name or 'testhub_recorded.py',
+            script_type='CODE',
+            content=content,
+            language='python',
+            framework='playwright',
+            source='recorded',
+            start_url=str(request.data.get('start_url') or analysis.get('start_url') or '')[:500],
+            recording_config={
+                'browser': request.data.get('browser', 'chromium'),
+                'device': request.data.get('device', ''),
+                'save_storage': _request_bool(request.data.get('save_storage'), False),
+            },
+            analysis={key: value for key, value in analysis.items() if key != 'normalized_content'},
+        )
+        log_operation('create', 'script', script.id, script.name, request.user)
+        payload = TestScriptSerializer(script, context={'request': request}).data
+        payload['analysis'] = script.analysis
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='run')
+    def run_recorded_script(self, request, pk=None):
+        script = self.get_object()
+        if script.language != 'python' or script.framework != 'playwright':
+            return Response({'error': '本期只支持Python Playwright脚本'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            analysis = analyze_script(script.content)
+            browser = str(request.data.get('browser') or script.recording_config.get('browser') or 'chromium').lower()
+            if browser not in {'chromium', 'chrome'}:
+                return Response({'error': '本期回放仅支持Chromium'}, status=status.HTTP_400_BAD_REQUEST)
+            headless = _request_bool(request.data.get('headless'), True)
+            execution = TestExecution.objects.create(
+                project=script.project,
+                test_script=script,
+                execution_type='recorded_script',
+                status='PENDING',
+                engine='playwright',
+                browser='chromium',
+                headless=headless,
+                executed_by=request.user,
+                run_config={
+                    'base_url': str(request.data.get('base_url') or '').strip(),
+                    'content_hash': analysis['content_hash'],
+                    'script_source': 'saved_snapshot',
+                },
+            )
+            log_operation('run', 'script', script.id, script.name, request.user)
+            start_script_execution(execution.id)
+            return Response(TestExecutionSerializer(execution, context={'request': request}).data, status=status.HTTP_202_ACCEPTED)
+        except Exception as exc:
+            logger.exception('创建脚本回放失败')
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['post'], url_path='run-unsaved')
+    def run_unsaved_script(self, request):
+        """Run editor content in an isolated temporary directory without saving it."""
+        project_id = request.data.get('project') or request.data.get('project_id')
+        project = UiProject.objects.filter(pk=project_id).filter(
+            models.Q(owner=request.user) | models.Q(members=request.user)
+        ).distinct().first()
+        if not project:
+            return Response({'error': '项目不存在或无权访问'}, status=status.HTTP_404_NOT_FOUND)
+
+        content = request.data.get('content')
+        if not isinstance(content, str) or not content.strip():
+            return Response({'error': '脚本内容不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            analysis = analyze_script(content)
+            browser = str(request.data.get('browser') or 'chromium').lower()
+            if browser not in {'chromium', 'chrome'}:
+                return Response({'error': '本期回放仅支持Chromium'}, status=status.HTTP_400_BAD_REQUEST)
+            execution = TestExecution.objects.create(
+                project=project,
+                test_script=None,
+                execution_type='recorded_script',
+                status='PENDING',
+                engine='playwright',
+                browser='chromium',
+                headless=_request_bool(request.data.get('headless'), True),
+                executed_by=request.user,
+                run_config={
+                    'base_url': str(request.data.get('base_url') or '').strip(),
+                    'start_url': str(request.data.get('start_url') or analysis.get('start_url') or '').strip(),
+                    'content_hash': analysis['content_hash'],
+                    'script_source': 'editor_snapshot',
+                },
+            )
+            start_script_execution(execution.id, analysis['normalized_content'])
+            return Response(
+                TestExecutionSerializer(execution, context={'request': request}).data,
+                status=status.HTTP_202_ACCEPTED,
+            )
+        except (UnicodeDecodeError, ScriptSecurityError) as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.exception('创建未保存脚本回放失败')
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='executions')
+    def script_executions(self, request, pk=None):
+        script = self.get_object()
+        queryset = TestExecution.objects.filter(test_script=script).select_related('executed_by')
+        page = self.paginate_queryset(queryset)
+        serializer = TestExecutionSerializer(page or queryset, many=True, context={'request': request})
+        return self.get_paginated_response(serializer.data) if page is not None else Response(serializer.data)
+
 
 class TestSuiteViewSet(viewsets.ModelViewSet):
     queryset = TestSuite.objects.all()
@@ -886,6 +1090,29 @@ class TestExecutionViewSet(viewsets.ModelViewSet):
         suite_name = instance.test_suite.name if instance.test_suite else f"执行记录#{instance.id}"
         log_operation('delete', 'report', instance.id, suite_name, self.request.user)
         instance.delete()
+
+    @action(detail=True, methods=['get'], url_path='logs')
+    def logs(self, request, pk=None):
+        execution = self.get_object()
+        return Response({
+            'id': execution.id,
+            'status': execution.status,
+            'logs': execution.execution_logs or '',
+            'error_message': execution.error_message or '',
+            'duration': execution.duration,
+        })
+
+    @action(detail=True, methods=['post'], url_path='abort')
+    def abort(self, request, pk=None):
+        execution = self.get_object()
+        if execution.status not in {'PENDING', 'RUNNING'}:
+            return Response({'error': '当前执行已结束'}, status=status.HTTP_400_BAD_REQUEST)
+        stop_script_execution(execution.id)
+        execution.status = 'ABORTED'
+        execution.finished_at = timezone.now()
+        execution.error_message = '用户手动终止执行'
+        execution.save(update_fields=['status', 'finished_at', 'error_message'])
+        return Response(TestExecutionSerializer(execution, context={'request': request}).data)
 
 
 class ScreenshotViewSet(viewsets.ModelViewSet):
