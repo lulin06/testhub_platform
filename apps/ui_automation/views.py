@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 import logging
 import json
@@ -17,6 +17,7 @@ import random
 import time
 import shlex
 from urllib.parse import urlparse
+from urllib.parse import unquote
 
 from .models import (
     UiProject, LocatorStrategy, Element, TestScript, TestSuite,
@@ -49,6 +50,7 @@ from .serializers import (
 from .operation_logger import log_operation
 from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 from .script_security import MAX_SCRIPT_BYTES, ScriptSecurityError, analyze_script
+from .recording_sync import UnsupportedRecordingCode, generate_code, parse_recording
 from .script_runner import start_script_execution, stop_script_execution
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,123 @@ def _request_bool(value, default=False):
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+LOCATOR_STRATEGY_NAMES = {
+    'css': 'CSS', 'css selector': 'CSS', 'xpath': 'XPath', 'id': 'ID',
+    'name': 'name', 'class': 'class', 'tag': 'tag', 'text': 'text',
+    'placeholder': 'placeholder', 'role': 'role', 'label': 'label',
+    'title': 'title', 'test-id': 'test-id', 'alt-text': 'text',
+}
+
+
+def _canonical_locator_strategy(value):
+    key = str(value or 'css').strip().lower()
+    return LOCATOR_STRATEGY_NAMES.get(key, key)
+
+
+def _page_name_from_url(value):
+    """从起始 URL 的最后一路径推断元素所属页面名称。"""
+    parsed = urlparse(str(value or ''))
+    segments = [segment for segment in parsed.path.split('/') if segment]
+    if not segments:
+        return ''
+    name = re.sub(r'[-_]+', ' ', unquote(segments[-1])).strip()
+    return name[:200]
+
+
+def _element_metadata(action, locator):
+    """根据动作和定位器语义推断元素类型及可辨识名称。"""
+    locator = locator or {}
+    options = locator.get('options') or {}
+    strategy = str(locator.get('strategy') or '').lower()
+    value = str(locator.get('value') or '')
+    semantic_name = str(options.get('name') or options.get('label') or options.get('placeholder') or '')
+    if not semantic_name and strategy in {'label', 'placeholder', 'text', 'test-id'}:
+        semantic_name = value
+    role = value.lower() if strategy == 'role' else ''
+    if action == 'fill' or role in {'textbox', 'searchbox'} or strategy in {'label', 'placeholder'}:
+        element_type, suffix = 'INPUT', '输入框'
+    elif role == 'link':
+        element_type, suffix = 'LINK', '链接'
+    elif role in {'combobox', 'listbox'} or action == 'select':
+        element_type, suffix = 'DROPDOWN', '下拉框'
+    elif role == 'checkbox' or action in {'check', 'uncheck'}:
+        element_type, suffix = 'CHECKBOX', '复选框'
+    elif action in {'getText', 'assert'} or strategy in {'text', 'test-id'}:
+        element_type, suffix = 'TEXT', '文本'
+    else:
+        element_type, suffix = 'BUTTON', '按钮'
+    if semantic_name:
+        name = f'{semantic_name}{suffix}'
+    elif role:
+        name = f'{value}{suffix}'
+    else:
+        short_value = value.strip()[:64]
+        name = f'{strategy or "元素"}:{short_value}' if short_value else '录制元素'
+    return element_type, name[:200]
+
+
+def _resolve_element(project, user, action, locator, page_url, strategies):
+    """按项目、定位策略和值复用元素；不存在时自动创建元素库记录。"""
+    if not locator or not locator.get('value'):
+        return None
+    strategy_name = _canonical_locator_strategy(locator.get('strategy'))
+    strategy = strategies.get(strategy_name.lower())
+    if strategy is None:
+        strategy = LocatorStrategy.objects.filter(name__iexact=strategy_name).first()
+        if strategy is None:
+            strategy = LocatorStrategy.objects.create(
+                name=strategy_name,
+                description='Playwright定位策略'
+            )
+        strategies[strategy_name.lower()] = strategy
+
+    locator_value = str(locator['value'])[:500]
+    locator_options = locator.get('options') or {}
+    element = Element.objects.filter(
+        project=project,
+        locator_strategy=strategy,
+        locator_value=locator_value,
+        locator_options=locator_options,
+    ).first()
+    if element:
+        return element
+
+    page_name = _page_name_from_url(page_url)
+    group = None
+    if page_name:
+        group = ElementGroup.objects.filter(project=project, name=page_name, parent_group__isnull=True).first()
+        if group is None:
+            group = ElementGroup.objects.create(project=project, name=page_name)
+    element_type, element_name = _element_metadata(action, locator)
+    return Element.objects.create(
+        project=project,
+        group=group,
+        page=page_name,
+        name=element_name,
+        element_type=element_type,
+        locator_strategy=strategy,
+        locator_value=locator_value,
+        locator_options=locator_options,
+        created_by=user,
+    )
+
+
+def _find_matching_element(project, locator):
+    """反解析代码时查找完全匹配的已有元素，避免重复建库。"""
+    if not locator or not locator.get('value'):
+        return None
+    strategy_name = _canonical_locator_strategy(locator.get('strategy'))
+    strategy = LocatorStrategy.objects.filter(name__iexact=strategy_name).first()
+    if strategy is None:
+        return None
+    return Element.objects.filter(
+        project=project,
+        locator_strategy=strategy,
+        locator_value=str(locator['value'])[:500],
+        locator_options=locator.get('options') or {},
+    ).first()
 
 
 def extract_step_info(s, step_index):
@@ -648,6 +767,166 @@ class TestScriptViewSet(viewsets.ModelViewSet):
         ).distinct()
         return TestScript.objects.filter(project__in=accessible_projects)
 
+    @action(detail=True, methods=['post'], url_path='parse-steps')
+    def parse_steps(self, request, pk=None):
+        """解析编辑器代码，并把定位器匹配到当前项目的元素库。"""
+        script = self.get_object()
+        content = request.data.get('content', script.content)
+        try:
+            analysis = analyze_script(content)
+            steps = parse_recording(content)
+        except (ScriptSecurityError, UnsupportedRecordingCode) as exc:
+            return Response({'error': str(exc), 'line': getattr(exc, 'line', None)}, status=status.HTTP_400_BAD_REQUEST)
+        start_url = analysis['start_url']
+        for step in steps:
+            locator = (step.get('action_params') or {}).get('locator')
+            element = _find_matching_element(script.project, locator)
+            step['element_id'] = element.id if element else ''
+            if element:
+                step['target_element'] = {
+                    'id': element.id,
+                    'name': element.name,
+                    'page': element.page,
+                    'locator_value': element.locator_value,
+                    'locator_options': element.locator_options,
+                    'locator_strategy': {'name': element.locator_strategy.name},
+                }
+        return Response({'steps': steps, 'start_url': start_url})
+
+    @action(detail=True, methods=['put'], url_path='editor')
+    def save_editor(self, request, pk=None):
+        """事务性保存脚本和步骤，同时创建或复用元素库记录。"""
+        script = self.get_object()
+        steps = request.data.get('steps', [])
+        content = request.data.get('content', '')
+        if not isinstance(steps, list) or not isinstance(content, str):
+            return Response({'error': '脚本或步骤数据格式无效'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            analyze_script(content)
+            with transaction.atomic():
+                script.name = str(request.data.get('name') or script.name).strip()[:200]
+                script.content = content
+                script.start_url = str(request.data.get('start_url') or '')[:500]
+                script.save(update_fields=['name', 'content', 'start_url', 'updated_at'])
+                script.steps.all().delete()
+                strategies = {item.name.lower(): item for item in LocatorStrategy.objects.all()}
+                page_url = script.start_url or request.data.get('start_url') or ''
+                if not page_url:
+                    page_url = next((str(step.get('input_value') or '') for step in steps
+                                     if step.get('action_type') == 'navigate' and step.get('input_value')), '')
+                created_steps = []
+                for index, raw in enumerate(steps, 1):
+                    data = dict(raw)
+                    params = data.get('action_params') or {}
+                    locator = params.get('locator') or {
+                        'strategy': data.get('locator_strategy'),
+                        'value': data.get('locator_value'),
+                        'options': {'name': data.get('locator_name')} if data.get('locator_name') else {},
+                    }
+                    if locator.get('strategy') and locator.get('value'):
+                        params['locator'] = locator
+                    element = None
+                    element_id = data.get('element_id') or data.get('target_element')
+                    if element_id:
+                        element = Element.objects.filter(pk=element_id, project_id=script.project_id).first()
+                        if not element:
+                            raise ValidationError({'steps': [f'步骤{index}的元素不属于当前项目']})
+                        if locator.get('value') and (
+                            element.locator_value != str(locator['value']) or
+                            element.locator_strategy.name.lower() != str(locator.get('strategy') or '').lower() or
+                            (element.locator_options or {}) != (locator.get('options') or {})
+                        ):
+                            element = None
+                    if element is None and locator.get('value'):
+                        element = _resolve_element(
+                            script.project, request.user, data.get('action_type'), locator,
+                            page_url, strategies
+                        )
+                    action = str(data.get('action_type') or '').strip()
+                    stored_action = {
+                        'click': 'CLICK', 'fill': 'INPUT', 'press': 'PRESS', 'select': 'SELECT',
+                        'check': 'CHECK', 'uncheck': 'UNCHECK', 'getText': 'GETTEXT',
+                        'waitFor': 'WAITFOR', 'assert': 'VERIFY', 'wait': 'WAIT',
+                        'hover': 'HOVER', 'scroll': 'SCROLL', 'navigate': 'NAVIGATE',
+                        'screenshot': 'SCREENSHOT', 'switchTab': 'SWITCH_TAB',
+                    }.get(action, action.upper() or 'CUSTOM')
+                    created_steps.append(ScriptStep(
+                        script=script,
+                        step_order=index,
+                        action_type=stored_action,
+                        target_element=element,
+                        action_params=params,
+                        input_value=str(data.get('input_value') or ''),
+                        wait_time=int(data.get('wait_time') or 1000),
+                        assert_type=str(data.get('assert_type') or ''),
+                        assert_value=str(data.get('assert_value') or ''),
+                        description=str(data.get('description') or f'步骤{index}')[:500],
+                        raw_code=str(data.get('raw_code') or ''),
+                        source_line_start=data.get('source_line_start'),
+                        source_line_end=data.get('source_line_end'),
+                    ))
+                ScriptStep.objects.bulk_create(created_steps)
+                script.analysis = {**(script.analysis or {}), 'steps_synced': True}
+                script.save(update_fields=['analysis', 'updated_at'])
+            return Response(TestScriptSerializer(script, context={'request': request}).data)
+        except ScriptSecurityError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='generate-code')
+    def generate_editor_code(self, request, pk=None):
+        """根据结构化步骤生成编辑器右侧代码。"""
+        self.get_object()
+        return Response({'content': generate_code(request.data.get('steps', []), request.data.get('start_url', ''))})
+
+    @action(detail=True, methods=['post'], url_path='to-test-case')
+    def to_test_case(self, request, pk=None):
+        """把已同步的脚本步骤复制为可执行 UI 测试用例。"""
+        script = self.get_object()
+        steps = list(script.steps.select_related('target_element').order_by('step_order'))
+        if not steps:
+            return Response({'error': '请先在编辑器中完成步骤同步并保存'}, status=status.HTTP_400_BAD_REQUEST)
+        action_map = {'CLICK': 'click', 'INPUT': 'fill', 'PRESS': 'press', 'HOVER': 'hover', 'WAIT': 'wait', 'WAITFOR': 'waitFor', 'NAVIGATE': 'navigate', 'SCREENSHOT': 'screenshot', 'VERIFY': 'assert', 'GETTEXT': 'getText', 'SELECT': 'select', 'CHECK': 'check', 'UNCHECK': 'uncheck', 'SCROLL': 'scroll', 'SWITCH_TAB': 'switchTab', 'CUSTOM': None}
+        unsupported = [step.step_order for step in steps if action_map.get(step.action_type) is None]
+        if unsupported:
+            return Response({'error': f'步骤 {", ".join(map(str, unsupported))} 尚不能转换为可执行测试用例'}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            test_case = TestCase.objects.create(
+                project=script.project,
+                name=str(request.data.get('name') or script.name.removesuffix('.py'))[:200],
+                description=str(request.data.get('description') or script.description),
+                priority=request.data.get('priority', 'medium'),
+                created_by=request.user,
+            )
+            case_steps = []
+            conversion_steps = steps
+            start_url = str(request.data.get('start_url') or script.start_url or '').strip()
+            if start_url and not any(step.action_type == 'NAVIGATE' for step in steps):
+                case_steps.append(TestCaseStep(
+                    test_case=test_case,
+                    step_number=1,
+                    action_type='navigate',
+                    input_value=start_url,
+                    description='打开起始URL',
+                ))
+            for index, step in enumerate(conversion_steps, len(case_steps) + 1):
+                action = action_map.get(step.action_type)
+                if action is None:
+                    continue
+                case_steps.append(TestCaseStep(
+                    test_case=test_case,
+                    step_number=index,
+                    action_type=action,
+                    element=step.target_element,
+                    input_value=step.input_value or (step.action_params or {}).get('select_value', ''),
+                    wait_time=step.wait_time,
+                    assert_type=step.assert_type,
+                    assert_value=step.assert_value,
+                    description=step.description,
+                ))
+            TestCaseStep.objects.bulk_create(case_steps)
+        log_operation('create', 'test_case', test_case.id, test_case.name, request.user)
+        return Response(TestCaseSerializer(test_case, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=['post'], url_path='preflight')
     def preflight(self, request):
         """Run the same AST safety and replay-risk checks before execution."""
@@ -1156,7 +1435,10 @@ class TestCaseViewSet(viewsets.ModelViewSet):
         accessible_projects = UiProject.objects.filter(
             models.Q(owner=user) | models.Q(members=user)
         ).distinct()
-        return TestCase.objects.filter(project__in=accessible_projects).select_related('project', 'created_by')
+        # 预取步骤及元素定位信息，保证详情序列化时能完整返回步骤回显数据。
+        return TestCase.objects.filter(project__in=accessible_projects).select_related(
+            'project', 'created_by'
+        ).prefetch_related('steps__element__locator_strategy')
 
     def _validate_steps(self, steps_data, project_id):
         """校验测试用例提交的步骤，并复用步骤序列化器的业务规则。"""

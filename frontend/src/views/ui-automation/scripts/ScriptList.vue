@@ -52,7 +52,7 @@
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column :label="$t('uiAutomation.script.operationColumn')" width="410" fixed="right">
+        <el-table-column :label="$t('uiAutomation.script.operationColumn')" width="520" fixed="right">
           <template #default="{ row }">
             <div class="row-actions">
               <el-button size="small" text type="primary" @click="replayScript(row)">
@@ -70,6 +70,9 @@
               <el-button size="small" text @click="editScript(row)">
                 <el-icon><Edit /></el-icon>
                 {{ $t('uiAutomation.script.edit') }}
+              </el-button>
+              <el-button size="small" text type="success" @click="openConvertDialog(row)">
+                转为测试用例
               </el-button>
               <el-tooltip :content="$t('uiAutomation.script.delete')">
                 <el-button size="small" text type="danger" :aria-label="$t('uiAutomation.script.delete')" @click="deleteScript(row)">
@@ -119,25 +122,52 @@
     </el-dialog>
 
     <!-- 编辑对话框 -->
-    <el-dialog v-model="showEditDialog" :title="$t('uiAutomation.script.editScript')" width="80%" :close-on-click-modal="false">
+    <el-dialog v-model="showEditDialog" title="步骤与代码同步编辑" width="96%" top="3vh" :close-on-click-modal="false" class="sync-editor-dialog" @opened="createMonaco" @closed="disposeMonaco">
       <div v-if="editingScript" class="script-editor">
-        <el-form label-position="top" class="edit-script-name">
-          <el-form-item :label="$t('uiAutomation.script.scriptName')">
-            <el-input v-model="editingScript.name" maxlength="200" show-word-limit />
-          </el-form-item>
-        </el-form>
-        <div class="editor-container">
-          <textarea
-            v-model="editingScript.content"
-            class="code-editor"
-            :placeholder="$t('uiAutomation.script.scriptEditorPlaceholder')"
-            spellcheck="false"
-          />
+        <div class="sync-editor-topbar">
+          <el-input v-model="editingScript.name" maxlength="200" class="script-title-input" />
+          <el-tag :type="syncState === 'synced' ? 'success' : 'warning'">{{ syncStateText }}</el-tag>
+          <span class="topbar-actions">
+            <el-button size="small" @click="parseCode" :loading="syncing">代码反解析回步骤</el-button>
+            <el-button size="small" @click="generateFromSteps" :loading="syncing">重新生成代码</el-button>
+          </span>
         </div>
+        <div class="sync-editor-body">
+          <div class="steps-pane">
+            <StructuredStepEditor v-model="editingSteps" :elements="editorElements" title="录制步骤" @change="onStepsChanged" />
+          </div>
+          <div class="code-pane">
+            <div class="pane-heading">生成的 Playwright 代码 <el-tag size="small" type="success">步骤 ↔ 代码同步</el-tag></div>
+            <div ref="monacoHost" class="monaco-host" />
+          </div>
+        </div>
+        <el-alert v-if="editorError" :title="editorError" type="error" :closable="true" @close="editorError = ''" />
       </div>
       <template #footer>
         <el-button @click="showEditDialog = false">{{ $t('uiAutomation.common.cancel') }}</el-button>
-        <el-button type="primary" @click="saveEditedScript" :loading="saving">{{ $t('uiAutomation.script.save') }}</el-button>
+        <el-button type="primary" @click="saveEditedScript" :loading="saving">保存脚本和步骤</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showConvertDialog" title="转为测试用例" width="78%" :close-on-click-modal="false">
+      <el-form label-width="90px" class="convert-form">
+        <el-row :gutter="16">
+          <el-col :span="12"><el-form-item label="用例名称" required><el-input v-model="convertForm.name" maxlength="200" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="起始 URL"><el-input v-model="convertForm.startUrl" /></el-form-item></el-col>
+        </el-row>
+        <el-form-item label="用例描述"><el-input v-model="convertForm.description" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <el-table :data="convertSteps" stripe max-height="280" size="small">
+        <el-table-column type="index" label="#" width="55" />
+        <el-table-column label="动作类型" width="120"><template #default="{ row }">{{ actionLabel(row.action_type) }}</template></el-table-column>
+        <el-table-column label="元素 / 定位器" min-width="260"><template #default="{ row }">{{ getStepElementText(row) }}</template></el-table-column>
+        <el-table-column prop="description" label="步骤描述" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="input_value" label="输入值" min-width="150" show-overflow-tooltip />
+        <el-table-column prop="assert_value" label="断言" min-width="130" show-overflow-tooltip />
+      </el-table>
+      <template #footer>
+        <el-button @click="showConvertDialog = false">取消</el-button>
+        <el-button type="primary" @click="convertToTestCase" :loading="converting">确认入库</el-button>
       </template>
     </el-dialog>
 
@@ -148,7 +178,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, View, Edit, Delete, VideoPlay, Clock, Upload } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
@@ -157,10 +187,19 @@ import { useI18n } from 'vue-i18n'
 import {
   getUiProjects,
   getTestScripts,
-  updateTestScript,
   deleteTestScript,
-  importRecordedScript
+  importRecordedScript,
+  getElements,
+  getScriptSteps,
+  parseScriptSteps,
+  saveScriptEditor,
+  generateScriptCode,
+  convertScriptToTestCase
 } from '@/api/ui_automation'
+import StructuredStepEditor from '@/components/ui-automation/StructuredStepEditor.vue'
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
+import 'monaco-editor/esm/vs/editor/browser/widget/codeEditor/editor.css'
 import RecordingWizard from './RecordingWizard.vue'
 import ScriptReplayDialog from './ScriptReplayDialog.vue'
 import ScriptHistoryDialog from './ScriptHistoryDialog.vue'
@@ -189,6 +228,44 @@ const uploadingScript = ref(false)
 const currentScript = ref(null)
 const editingScript = ref(null)
 const saving = ref(false)
+const syncing = ref(false)
+const converting = ref(false)
+const editingSteps = ref([])
+const editorElements = ref([])
+const monacoHost = ref(null)
+const editorError = ref('')
+const syncState = ref('synced')
+const showConvertDialog = ref(false)
+const convertScript = ref(null)
+const convertSteps = ref([])
+const convertForm = ref({ name: '', startUrl: '', description: '' })
+let codeEditor = null
+let suppressCodeChange = false
+let generateTimer = null
+const syncStateText = computed(() => ({ synced: '已同步', steps: '步骤待生成代码', code: '代码待反解析' }[syncState.value]))
+// 兼容后端大写动作和编辑器驼峰动作，保证两侧显示一致。
+const normalizeAction = value => ({
+  CLICK: 'click', INPUT: 'fill', FILL: 'fill', PRESS: 'press', SELECT: 'select',
+  CHECK: 'check', UNCHECK: 'uncheck', HOVER: 'hover', GETTEXT: 'getText',
+  GET_TEXT: 'getText', WAITFOR: 'waitFor', WAIT_FOR: 'waitFor', SCROLL: 'scroll', SCREENSHOT: 'screenshot',
+  ASSERT: 'assert', VERIFY: 'assert', WAIT: 'wait', SWITCHTAB: 'switchTab',
+  SWITCH_TAB: 'switchTab', NAVIGATE: 'navigate'
+}[String(value || '').replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()] || value)
+const actionLabel = value => ({
+  click: '点击', fill: '输入文本', press: '按键', select: '选择选项', check: '勾选', uncheck: '取消勾选',
+  getText: '获取文本', waitFor: '等待元素', hover: '悬停', scroll: '滚动', screenshot: '截图',
+  assert: '断言', wait: '等待', switchTab: '切换标签页', navigate: '跳转URL'
+}[normalizeAction(value)] || value || '-')
+const getStepElementText = step => {
+  const element = step.target_element
+  if (element) {
+    const strategy = element.locator_strategy?.name || element.locator_strategy || ''
+    const value = element.locator_value || ''
+    return `${element.name || '元素'}${strategy || value ? ` (${strategy}${strategy && value ? '=' : ''}${value})` : ''}`
+  }
+  const locator = step.action_params?.locator
+  return locator ? `${locator.strategy || '定位器'}=${locator.value || '-'}` : '-'
+}
 
 // 加载项目列表
 const loadProjects = async () => {
@@ -319,10 +396,177 @@ const viewScript = (script) => {
 }
 
 // 编辑脚本
-const editScript = (script) => {
+// 打开同步编辑器时同时加载已保存步骤和项目元素，保证左右两侧能立即回显。
+const editScript = async (script) => {
   editingScript.value = { ...script, name: (script.name || '').replace(/\.py$/i, '') }
+  editingSteps.value = []
+  editorError.value = ''
+  syncState.value = 'synced'
   showDetailDialog.value = false
   showEditDialog.value = true
+  try {
+    const [stepResponse, elementResponse] = await Promise.all([
+      getScriptSteps({ script: script.id, page_size: 1000 }),
+      getElements({ project: script.project?.id || selectedProject.value, page_size: 1000 })
+    ])
+    let rawSteps = stepResponse.data.results || stepResponse.data
+    editorElements.value = elementResponse.data.results || elementResponse.data
+    if (!rawSteps.length) {
+      const parsed = await parseScriptSteps(script.id, script.content || '')
+      rawSteps = parsed.data.steps.map((step, index) => ({
+        ...step, id: `parsed-${index}-${Date.now()}`
+      }))
+    }
+    editingSteps.value = rawSteps.map(step => {
+      const locator = step.action_params?.locator || {}
+      const element = step.target_element
+      const strategyName = locator.strategy || element?.locator_strategy?.name?.toLowerCase() || 'role'
+      return {
+        ...step,
+        action_type: normalizeAction(step.action_type),
+        id: step.id,
+        element_id: element?.id || step.element_id || '',
+        element_page: element?.page || '',
+        locator_strategy: strategyName,
+        locator_value: locator.value || element?.locator_value || '',
+        locator_name: locator.options?.name || element?.locator_options?.name || '',
+        input_value: step.input_value || '',
+        wait_time: step.wait_time || 1000,
+        assert_type: step.assert_type || 'textContains',
+        assert_value: step.assert_value || '',
+        expanded: true
+      }
+    })
+  } catch (error) {
+    editorError.value = error.response?.data?.detail || '加载步骤或元素库失败'
+  }
+}
+
+// 创建代码编辑器实例；代码变更只标记为待反解析，不自动覆盖左侧步骤。
+const createMonaco = () => {
+  if (!monacoHost.value || codeEditor) return
+  codeEditor = monaco.editor.create(monacoHost.value, {
+    value: editingScript.value?.content || '', language: 'python', theme: 'vs-dark', automaticLayout: true,
+    minimap: { enabled: false }, fontSize: 13, lineHeight: 20, tabSize: 4, wordWrap: 'on', scrollBeyondLastLine: false
+  })
+  codeEditor.onDidChangeModelContent(() => {
+    if (!suppressCodeChange) syncState.value = 'code'
+  })
+}
+
+const disposeMonaco = () => {
+  if (generateTimer) clearTimeout(generateTimer)
+  codeEditor?.dispose()
+  codeEditor = null
+}
+
+const applyCode = content => {
+  if (codeEditor && codeEditor.getValue() !== content) {
+    suppressCodeChange = true
+    codeEditor.setValue(content)
+    suppressCodeChange = false
+  }
+  if (editingScript.value) editingScript.value.content = content
+}
+
+// 步骤发生变化后延迟生成代码，减少连续编辑造成的重复请求。
+const onStepsChanged = () => {
+  if (syncState.value === 'code') return
+  syncState.value = 'steps'
+  if (generateTimer) clearTimeout(generateTimer)
+  generateTimer = setTimeout(generateFromSteps, 400)
+}
+
+// 将编辑器字段重新组装成后端 action_params 结构并保留定位选项。
+const editorStepPayload = () => editingSteps.value.map(step => ({
+  ...step,
+  action_params: {
+    ...(step.action_params || {}),
+    locator: step.locator_value ? {
+      strategy: step.locator_strategy,
+      value: step.locator_value,
+      options: {
+        ...(step.action_params?.locator?.options || {}),
+        ...(step.locator_name ? { name: step.locator_name } : {})
+      }
+    } : step.action_params?.locator
+  }
+}))
+
+// 把左侧步骤提交给后端统一生成 Playwright 代码。
+const generateFromSteps = async () => {
+  if (!editingScript.value) return
+  syncing.value = true
+  try {
+    const response = await generateScriptCode(editingScript.value.id, {
+      steps: editorStepPayload(), start_url: editingScript.value.start_url || ''
+    })
+    applyCode(response.data.content)
+    syncState.value = 'synced'
+  } catch (error) {
+    editorError.value = error.response?.data?.error || '代码生成失败'
+  } finally {
+    syncing.value = false
+  }
+}
+
+// 将右侧手工修改的代码反解析，并映射回结构化步骤字段。
+const parseCode = async () => {
+  if (!editingScript.value) return
+  syncing.value = true
+  editorError.value = ''
+  try {
+    const response = await parseScriptSteps(editingScript.value.id, codeEditor?.getValue() || editingScript.value.content)
+    editingSteps.value = response.data.steps.map((step, index) => ({
+      ...step, id: `parsed-${index}-${Date.now()}`, action_type: normalizeAction(step.action_type),
+      element_id: step.element_id || step.target_element?.id || '',
+      element_page: step.target_element?.page || '', target_element: step.target_element || null,
+      locator_strategy: step.action_params?.locator?.strategy || step.target_element?.locator_strategy?.name?.toLowerCase() || 'role',
+      locator_value: step.action_params?.locator?.value || '',
+      locator_name: step.action_params?.locator?.options?.name || '', expanded: true
+    }))
+    if (response.data.start_url) editingScript.value.start_url = response.data.start_url
+    syncState.value = 'synced'
+  } catch (error) {
+    editorError.value = error.response?.data?.error || '代码反解析失败'
+  } finally {
+    syncing.value = false
+  }
+}
+
+// 转换前读取已保存步骤，预览内容与最终入库数据保持一致。
+const openConvertDialog = async script => {
+  convertScript.value = script
+  convertForm.value = { name: (script.name || '').replace(/\.py$/i, ''), startUrl: script.start_url || '', description: script.description || '' }
+  try {
+    const response = await getScriptSteps({ script: script.id, page_size: 1000 })
+    convertSteps.value = response.data.results || response.data
+    if (!convertSteps.value.length) {
+      ElMessage.warning('请先在编辑器中完成步骤同步并保存')
+      return
+    }
+    showConvertDialog.value = true
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '加载已同步步骤失败')
+  }
+}
+
+// 调用后端事务接口，把同步步骤复制为 UI 测试用例。
+const convertToTestCase = async () => {
+  if (!convertForm.value.name.trim()) return ElMessage.warning('请输入用例名称')
+  converting.value = true
+  try {
+    await convertScriptToTestCase(convertScript.value.id, {
+      name: convertForm.value.name.trim(), description: convertForm.value.description,
+      start_url: convertForm.value.startUrl
+    })
+    ElMessage.success('测试用例创建成功')
+    showConvertDialog.value = false
+  } catch (error) {
+    ElMessage.error(error.response?.data?.error || '转换测试用例失败')
+  } finally {
+    converting.value = false
+  }
 }
 
 // 保存编辑的脚本
@@ -336,9 +580,12 @@ const saveEditedScript = async () => {
   try {
     saving.value = true
 
-    await updateTestScript(editingScript.value.id, {
+    const content = codeEditor?.getValue() || editingScript.value.content
+    await saveScriptEditor(editingScript.value.id, {
       name,
-      content: editingScript.value.content
+      content,
+      start_url: editingScript.value.start_url || '',
+      steps: editorStepPayload()
     })
 
     ElMessage.success(t('uiAutomation.script.messages.saveSuccess'))
@@ -502,7 +749,7 @@ onMounted(async () => {
 .script-editor {
   display: flex;
   flex-direction: column;
-  height: 600px;
+  height: 76vh;
 }
 
 .edit-script-name { padding: 14px 15px 0; }
@@ -529,6 +776,21 @@ onMounted(async () => {
 .editor-container {
   flex: 1;
   position: relative;
+}
+
+.sync-editor-topbar { display: flex; align-items: center; gap: 12px; padding: 0 4px 12px; }
+.script-title-input { max-width: 300px; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.sync-editor-body { display: grid; grid-template-columns: minmax(420px, 48%) minmax(480px, 52%); gap: 12px; flex: 1; min-height: 0; }
+.steps-pane, .code-pane { min-height: 0; border: 1px solid #dcdfe6; border-radius: 4px; background: #fff; overflow: hidden; }
+.steps-pane { background: #f7f8fa; overflow: auto; }
+.code-pane { display: flex; flex-direction: column; background: #1e1e1e; }
+.pane-heading { color: #d4d4d4; padding: 9px 12px; border-bottom: 1px solid #3c3c3c; font-size: 13px; display: flex; justify-content: space-between; }
+.monaco-host { flex: 1; min-height: 0; }
+.convert-form { padding: 2px 8px 10px; }
+
+@media (max-width: 1100px) {
+  .sync-editor-body { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
 }
 
 .code-editor {

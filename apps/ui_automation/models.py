@@ -116,6 +116,8 @@ class Element(models.Model):
     # 主要定位策略
     locator_strategy = models.ForeignKey(LocatorStrategy, on_delete=models.PROTECT, verbose_name='定位策略')
     locator_value = models.CharField(max_length=500, verbose_name='定位表达式')
+    # 保存 role/name、nth 等附加参数，确保元素库可以还原原始定位器。
+    locator_options = models.JSONField(default=dict, blank=True, verbose_name='Playwright定位选项')
 
     # 备用定位策略
     backup_locators = models.JSONField(
@@ -344,7 +346,12 @@ class ScriptStep(models.Model):
     ACTION_TYPE_CHOICES = [
         ('CLICK', '点击'),
         ('INPUT', '输入'),
+        ('PRESS', '按键'),
         ('SELECT', '选择'),
+        ('CHECK', '勾选'),
+        ('UNCHECK', '取消勾选'),
+        ('GETTEXT', '获取文本'),
+        ('WAITFOR', '等待元素'),
         ('VERIFY', '验证'),
         ('WAIT', '等待'),
         ('HOVER', '悬停'),
@@ -362,7 +369,17 @@ class ScriptStep(models.Model):
     page_object = models.ForeignKey(PageObject, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='页面对象')
 
     # 操作参数
+    # 保存 AST 解析出的定位器及 select 等动作专属参数。
     action_params = models.JSONField(blank=True, null=True, verbose_name='操作参数', help_text='JSON格式的操作参数')
+    # 将动作参数拆开保存，便于步骤编辑器直接修改并重新生成代码。
+    input_value = models.TextField(blank=True, verbose_name='输入值')
+    wait_time = models.IntegerField(default=1000, verbose_name='等待时间(毫秒)')
+    assert_type = models.CharField(max_length=20, blank=True, verbose_name='断言类型')
+    assert_value = models.TextField(blank=True, verbose_name='断言期望值')
+    # 保留原始语句，遇到暂不支持的动作时仍可提示或回放。
+    raw_code = models.TextField(blank=True, verbose_name='原始代码')
+    source_line_start = models.IntegerField(null=True, blank=True, verbose_name='起始代码行')
+    source_line_end = models.IntegerField(null=True, blank=True, verbose_name='结束代码行')
 
     # 步骤描述
     description = models.CharField(max_length=500, verbose_name='步骤描述')
@@ -642,6 +659,10 @@ class TestCaseStep(models.Model):
     ACTION_TYPE_CHOICES = [
         ('click', '点击'),
         ('fill', '输入文本'),
+        ('press', '按键'),
+        ('select', '选择选项'),
+        ('check', '勾选'),
+        ('uncheck', '取消勾选'),
         ('getText', '获取文本'),
         ('waitFor', '等待元素'),
         ('hover', '悬停'),
