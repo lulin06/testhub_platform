@@ -239,7 +239,8 @@ class TestExecutor:
                         'id': step.element.id,
                         'name': step.element.name,
                         'locator_value': step.element.locator_value,
-                        'locator_strategy': step.element.locator_strategy.name if step.element.locator_strategy else 'css'
+                        'locator_strategy': step.element.locator_strategy.name if step.element.locator_strategy else 'css',
+                        'locator_options': step.element.locator_options or {},
                     }
 
                 case_data['steps'].append(step_data)
@@ -675,6 +676,26 @@ class TestExecutor:
                     selector = f'text={locator_value}'
                 else:
                     selector = locator_value
+                # 优先使用元素库保存的 Playwright 附加选项，保持录制定位器语义。
+                locator_options = element.get('locator_options') or {}
+                playwright_locator_methods = {
+                    'role': 'get_by_role', 'label': 'get_by_label',
+                    'placeholder': 'get_by_placeholder', 'title': 'get_by_title',
+                    'test-id': 'get_by_test_id', 'alt-text': 'get_by_alt_text',
+                }
+                method = playwright_locator_methods.get(locator_strategy)
+                if method:
+                    locator_factory = getattr(self.current_page, method)
+                    if locator_strategy == 'role':
+                        target_locator = locator_factory(locator_value, **locator_options)
+                    else:
+                        target_locator = locator_factory(locator_value, **locator_options)
+                    if locator_options.get('first'):
+                        target_locator = target_locator.first
+                    elif locator_options.get('nth') is not None:
+                        target_locator = target_locator.nth(locator_options['nth'])
+                else:
+                    target_locator = self.current_page.locator(selector)
 
                 # 根据操作类型执行动作
                 if step_data['action_type'] == 'click':
@@ -895,7 +916,7 @@ class TestExecutor:
 
                                 # 先尝试滚动到元素（确保元素在视口内）
                                 try:
-                                    self.current_page.locator(selector).scroll_into_view_if_needed(timeout=5000)
+                                    target_locator.scroll_into_view_if_needed(timeout=5000)
                                     print(f"  ✓ 元素已滚动到视口")
                                 except Exception as e:
                                     print(f"  ⚠️  滚动失败: {str(e)[:50]}")
@@ -927,9 +948,21 @@ class TestExecutor:
                         step_result['resolved_value'] = resolved_value
                         print(f"  ✓ 变量解析: {step_data['input_value']} -> {resolved_value}")
 
+                elif step_data['action_type'] == 'press':
+                    target_locator.press(resolve_variables(step_data['input_value']), timeout=step_data['wait_time'])
+                    step_result['success'] = True
+
+                elif step_data['action_type'] == 'select':
+                    target_locator.select_option(value=resolve_variables(step_data['input_value']), timeout=step_data['wait_time'])
+                    step_result['success'] = True
+
+                elif step_data['action_type'] in {'check', 'uncheck'}:
+                    getattr(target_locator, step_data['action_type'])(timeout=step_data['wait_time'])
+                    step_result['success'] = True
+
 
                 elif step_data['action_type'] == 'getText':
-                    text = self.current_page.text_content(selector, timeout=step_data['wait_time'])
+                    text = target_locator.text_content(timeout=step_data['wait_time'])
                     step_result['result'] = text
                     step_result['success'] = True
 
@@ -945,10 +978,10 @@ class TestExecutor:
 
                     if is_dropdown_option_wait:
                         # 对于下拉框选项，只等待元素在DOM中（attached），不要求可见
-                        self.current_page.wait_for_selector(selector, state='attached', timeout=step_data['wait_time'])
+                        target_locator.wait_for(state='attached', timeout=step_data['wait_time'])
                     else:
                         # 普通元素：等待可见
-                        self.current_page.wait_for_selector(selector, timeout=step_data['wait_time'])
+                        target_locator.wait_for(timeout=step_data['wait_time'])
 
                     step_result['success'] = True
 
@@ -957,7 +990,7 @@ class TestExecutor:
                     step_result['success'] = True
 
                 elif step_data['action_type'] == 'scroll':
-                    self.current_page.locator(selector).scroll_into_view_if_needed()
+                    target_locator.scroll_into_view_if_needed()
                     step_result['success'] = True
 
                 elif step_data['action_type'] == 'screenshot':
@@ -974,7 +1007,7 @@ class TestExecutor:
 
                     # 执行断言
                     if step_data['assert_type'] == 'textContains':
-                        text = self.current_page.text_content(selector, timeout=step_data['wait_time'])
+                        text = target_locator.text_content(timeout=step_data['wait_time'])
                         if resolved_assert_value in text:
                             step_result['success'] = True
                         else:
@@ -983,7 +1016,7 @@ class TestExecutor:
                             log += f"  - 实际文本: '{text}'"
                             step_result['error'] = log
                     elif step_data['assert_type'] == 'textEquals':
-                        text = self.current_page.text_content(selector, timeout=step_data['wait_time'])
+                        text = target_locator.text_content(timeout=step_data['wait_time'])
                         if text == resolved_assert_value:
                             step_result['success'] = True
                         else:
@@ -993,12 +1026,12 @@ class TestExecutor:
                             log += f"  - 实际: '{text}'"
                             step_result['error'] = log
                     elif step_data['assert_type'] == 'isVisible':
-                        is_visible = self.current_page.is_visible(selector)
+                        is_visible = target_locator.is_visible()
                         step_result['success'] = is_visible
                         if not is_visible:
                             step_result['error'] = f"✗ 断言失败: 元素 '{element_name}' 不可见"
                     elif step_data['assert_type'] == 'exists':
-                        count = self.current_page.locator(selector).count()
+                        count = target_locator.count()
                         step_result['success'] = count > 0
                         if count == 0:
                             step_result['error'] = f"✗ 断言失败: 元素 '{element_name}' 不存在"
@@ -1340,7 +1373,8 @@ class TestExecutor:
                         'id': step.element.id,
                         'name': step.element.name,
                         'locator_value': step.element.locator_value,
-                        'locator_strategy': step.element.locator_strategy.name if step.element.locator_strategy else 'css'
+                        'locator_strategy': step.element.locator_strategy.name if step.element.locator_strategy else 'css',
+                        'locator_options': step.element.locator_options or {},
                     }
 
                 case_data['steps'].append(step_data)
@@ -2177,6 +2211,19 @@ class TestExecutor:
                                 print(f"✓ 元素重新定位成功")
                             else:
                                 raise
+
+                elif step_data['action_type'] in {'press', 'select', 'check', 'uncheck'}:
+                    element_obj = wait.until(EC.presence_of_element_located((by, locator_value)))
+                    if step_data['action_type'] == 'press':
+                        element_obj.send_keys(resolve_variables(step_data['input_value']))
+                    elif step_data['action_type'] == 'select':
+                        from selenium.webdriver.support.ui import Select
+                        Select(element_obj).select_by_value(resolve_variables(step_data['input_value']))
+                    else:
+                        should_be_selected = step_data['action_type'] == 'check'
+                        if bool(element_obj.is_selected()) != should_be_selected:
+                            element_obj.click()
+                    step_result['success'] = True
 
                 elif step_data['action_type'] == 'getText':
                     # 先定位元素

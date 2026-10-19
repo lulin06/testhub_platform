@@ -512,11 +512,12 @@ class PageObjectElementSerializer(serializers.ModelSerializer):
 
 
 class ScriptStepSerializer(serializers.ModelSerializer):
+    """脚本结构化步骤序列化器，返回元素详情供双向编辑器回显。"""
     script = TestScriptSerializer(read_only=True)
     target_element = ElementEnhancedSerializer(read_only=True)
     page_object = PageObjectSerializer(read_only=True)
 
-    script_id = serializers.IntegerField(write_only=True)
+    script_id = serializers.IntegerField(write_only=True, required=False)
     target_element_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     page_object_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
@@ -578,15 +579,30 @@ class CodeGenerationSerializer(serializers.Serializer):
 
 class TestCaseStepSerializer(serializers.ModelSerializer):
     """测试用例步骤序列化器"""
+    # 除元素主键外，同时返回定位信息，供步骤编辑器直接回显。
     element_name = serializers.CharField(source='element.name', read_only=True)
+    element_page = serializers.CharField(source='element.page', read_only=True)
     element_locator = serializers.CharField(source='element.locator_value', read_only=True)
+    element_locator_strategy = serializers.SerializerMethodField()
+    element_locator_options = serializers.SerializerMethodField()
 
     class Meta:
         model = TestCaseStep
         fields = [
-            'id', 'step_number', 'action_type', 'element', 'element_name', 'element_locator',
+            'id', 'step_number', 'action_type', 'element', 'element_name', 'element_page', 'element_locator',
+            'element_locator_strategy', 'element_locator_options',
             'input_value', 'wait_time', 'assert_type', 'assert_value', 'description', 'created_at'
         ]
+
+    def get_element_locator_strategy(self, obj):
+        """返回元素关联的定位策略名称。"""
+        if not obj.element_id or not obj.element.locator_strategy_id:
+            return ''
+        return obj.element.locator_strategy.name
+
+    def get_element_locator_options(self, obj):
+        """返回 Playwright 定位器的附加参数。"""
+        return obj.element.locator_options if obj.element_id else {}
 
     def validate(self, attrs):
         """校验独立步骤接口提交的动作、元素和参数。"""

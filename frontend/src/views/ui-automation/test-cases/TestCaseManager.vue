@@ -131,178 +131,16 @@
             </div>
 
             <div class="steps-scroll-container">
-              <div class="steps-list">
-                <draggable
-                  v-model="currentSteps"
-                  item-key="id"
-                  handle=".drag-handle"
-                  @change="onStepsReorder"
-                >
-                  <template #item="{ element, index }">
-                    <div class="step-item" :class="{ expanded: element.expanded }">
-                      <div class="step-header">
-                        <div class="step-left">
-                          <el-icon class="drag-handle"><Rank /></el-icon>
-                          <span class="step-number">{{ index + 1 }}</span>
-                          <el-select
-                            v-model="element.action_type"
-                            :placeholder="t('uiAutomation.testCase.selectAction')"
-                            size="small"
-                            style="width: 120px"
-                            @change="onActionTypeChange(element)"
-                          >
-                            <el-option :label="t('uiAutomation.testCase.actionClick')" value="click" />
-                            <el-option :label="t('uiAutomation.testCase.actionFill')" value="fill" />
-                            <el-option :label="t('uiAutomation.testCase.actionGetText')" value="getText" />
-                            <el-option :label="t('uiAutomation.testCase.actionWaitFor')" value="waitFor" />
-                            <el-option :label="t('uiAutomation.testCase.actionHover')" value="hover" />
-                            <el-option :label="t('uiAutomation.testCase.actionScroll')" value="scroll" />
-                            <el-option :label="t('uiAutomation.testCase.actionScreenshot')" value="screenshot" />
-                            <el-option :label="t('uiAutomation.testCase.actionAssert')" value="assert" />
-                            <el-option :label="t('uiAutomation.testCase.actionWait')" value="wait" />
-                            <el-option :label="t('uiAutomation.testCase.actionSwitchTab')" value="switchTab" />
-                            <el-option :label="t('uiAutomation.testCase.actionNavigate')" value="navigate" />
-                          </el-select>
-                          <el-select
-                            v-if="needsElement(element)"
-                            v-model="element.element_page"
-                            :placeholder="t('uiAutomation.testCase.selectPage')"
-                            size="small"
-                            style="width: 150px"
-                            clearable
-                            @change="onElementPageChange(element)"
-                          >
-                            <el-option :label="t('uiAutomation.testCase.allPages')" value="" />
-                            <el-option
-                              v-for="page in pages"
-                              :key="page.id"
-                              :label="page.name"
-                              :value="page.name"
-                            />
-                          </el-select>
-                          <el-select
-                            v-if="needsElement(element)"
-                            v-model="element.element_id"
-                            :placeholder="t('uiAutomation.testCase.selectElement')"
-                            size="small"
-                            style="width: 250px"
-                            filterable
-                            @change="onElementChange(element)"
-                          >
-                            <el-option
-                              v-for="elem in getElementsForStep(element)"
-                              :key="elem.id"
-                              :label="`${elem.name} (${elem.locator_value})`"
-                              :value="elem.id"
-                            />
-                          </el-select>
-                        </div>
-                        <div class="step-right">
-                          <el-button
-                            size="small"
-                            text
-                            @click="element.expanded = !element.expanded"
-                          >
-                            <el-icon>
-                              <component :is="element.expanded ? 'ArrowUp' : 'ArrowDown'" />
-                            </el-icon>
-                          </el-button>
-                          <el-button size="small" text type="danger" @click="removeStep(index)">
-                            <el-icon><Delete /></el-icon>
-                          </el-button>
-                        </div>
-                      </div>
-
-                      <div v-if="element.expanded" class="step-content">
-                        <!-- 输入参数 -->
-                        <div v-if="needsInputValue(element.action_type)" class="step-param">
-                          <label>{{ t('uiAutomation.testCase.inputValue') }}</label>
-                          <div style="display: flex; gap: 5px; flex: 1">
-                            <el-input
-                              v-model="element.input_value"
-                              :placeholder="element.action_type === 'switchTab' ? t('uiAutomation.testCase.switchTabPlaceholder') : (element.action_type === 'navigate' ? t('uiAutomation.testCase.navigatePlaceholder') : t('uiAutomation.testCase.inputPlaceholder'))"
-                              size="small"
-                            >
-                              <template #append>
-                                <el-button
-                                  size="small"
-                                  :icon="MagicStick"
-                                  @click="openDataFactorySelector(element, 'input_value')"
-                                  :title="t('uiAutomation.testCase.referenceDataFactory')"
-                                  class="data-factory-btn"
-                                />
-                              </template>
-                            </el-input>
-                            <el-tooltip :content="t('uiAutomation.testCase.insertVariable')" placement="top" v-if="element.action_type !== 'switchTab'">
-                              <el-button size="small" @click="openVariableHelper(element, 'input_value')" class="variable-helper-btn">
-                                <el-icon><MagicStick /></el-icon>
-                              </el-button>
-                            </el-tooltip>
-                          </div>
-                        </div>
-
-                        <!-- 等待时间 -->
-                        <div v-if="needsWaitTime(element.action_type)" class="step-param">
-                          <label>{{ t('uiAutomation.testCase.waitTime') }}</label>
-                          <el-input-number
-                            v-model="element.wait_time"
-                            :min="100"
-                            :max="30000"
-                            :step="100"
-                            size="small"
-                          />
-                        </div>
-
-                        <!-- 断言参数 -->
-                        <div v-if="element.action_type === 'assert'" class="step-param">
-                          <label>{{ t('uiAutomation.testCase.assertType') }}</label>
-                          <el-select v-model="element.assert_type" size="small" style="width: 150px" @change="onAssertTypeChange(element)">
-                            <el-option :label="t('uiAutomation.testCase.assertTextContains')" value="textContains" />
-                            <el-option :label="t('uiAutomation.testCase.assertTextEquals')" value="textEquals" />
-                            <el-option :label="t('uiAutomation.testCase.assertIsVisible')" value="isVisible" />
-                            <el-option :label="t('uiAutomation.testCase.assertExists')" value="exists" />
-                            <el-option :label="t('uiAutomation.testCase.assertHasAttribute')" value="hasAttribute" />
-                            <el-option :label="t('uiAutomation.testCase.assertUrlContains')" value="urlContains" />
-                          </el-select>
-                          <div style="display: flex; align-items: center; margin-left: 10px; width: 240px">
-                            <el-input
-                              v-model="element.assert_value"
-                              :placeholder="t('uiAutomation.testCase.expectedValue')"
-                              size="small"
-                              style="flex: 1"
-                            >
-                              <template #append>
-                                <el-button
-                                  size="small"
-                                  :icon="MagicStick"
-                                  @click="openDataFactorySelector(element, 'assert_value')"
-                                  :title="t('uiAutomation.testCase.referenceDataFactory')"
-                                  class="data-factory-btn"
-                                />
-                              </template>
-                            </el-input>
-                            <el-tooltip :content="t('uiAutomation.testCase.insertVariable')" placement="top">
-                              <el-button size="small" style="margin-left: 5px" @click="openVariableHelper(element, 'assert_value')" class="variable-helper-btn">
-                                <el-icon><MagicStick /></el-icon>
-                              </el-button>
-                            </el-tooltip>
-                          </div>
-                        </div>
-
-                        <!-- 步骤描述 -->
-                        <div class="step-param">
-                          <label>{{ t('uiAutomation.testCase.stepDescription') }}</label>
-                          <el-input
-                            v-model="element.description"
-                            :placeholder="t('uiAutomation.testCase.stepDescPlaceholder')"
-                            size="small"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </template>
-                </draggable>
-              </div>
+              <StructuredStepEditor
+                v-model="currentSteps"
+                :elements="availableElements"
+                :pages="pages"
+                :helper-actions="true"
+                :show-toolbar="false"
+                @helper="({ step, field }) => openDataFactorySelector(step, field)"
+                @variable="({ step, field }) => openVariableHelper(step, field)"
+                @change="onStepsReorder"
+              />
             </div>
           </div>
 
@@ -527,12 +365,12 @@
 
 <script setup>
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
+import StructuredStepEditor from '@/components/ui-automation/StructuredStepEditor.vue'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Search, Plus, Edit, Delete, Check, CaretRight, ArrowUp, ArrowDown, Rank, Picture, Warning, View, ZoomIn, Refresh, WarningFilled, MagicStick
+  Search, Plus, Edit, Delete, Check, CaretRight, Picture, Warning, View, ZoomIn, Refresh, WarningFilled, MagicStick
 } from '@element-plus/icons-vue'
-import draggable from 'vuedraggable'
 import DataFactorySelector from '@/components/DataFactorySelector.vue'
 import { useI18n } from 'vue-i18n'
 
@@ -546,6 +384,7 @@ import {
   updateTestCase,
   deleteTestCase as deleteTestCaseApi,
   getTestCases,
+  getTestCaseDetail,
   runTestCase as runTestCaseApi,
   copyTestCase as copyTestCaseApi,
   getLocatorStrategies,
@@ -566,7 +405,9 @@ const showCreateDialog = ref(false)
 const editingTestCase = ref(null)
 const executionResult = ref(null)
 const resultActiveTab = ref('logs')
-const allStepsExpanded = ref(false)
+// 从当前步骤推导按钮状态，切换用例、保存回填和单步折叠时均自动更新。
+// 空步骤列表按未展开处理，避免 every() 对空数组返回 true。
+const allStepsExpanded = computed(() => currentSteps.value.length > 0 && currentSteps.value.every(step => step.expanded))
 const showSteps = ref(true)
 const showScreenshotPreview = ref(false)
 const currentScreenshot = ref(null)
@@ -688,21 +529,41 @@ const onProjectChange = async () => {
   ])
 }
 
-const selectTestCase = (testCase) => {
+// 将接口返回的测试步骤转换为结构化步骤组件所需的编辑字段。
+const hydrateTestCaseSteps = (steps = []) => steps.map(step => {
+  const element = availableElements.value.find(item => String(item.id) === String(step.element))
+  const strategy = element?.locator_strategy?.name || element?.locator_strategy || step.element_locator_strategy || ''
+  const locatorOptions = element?.locator_options || step.element_locator_options || {}
+  return {
+    ...step,
+    element_id: step.element || '',
+    // 优先使用元素库数据，详情接口字段作为元素列表尚未加载时的回退。
+    element_page: element?.page || step.element_page || '',
+    locator_strategy: strategy.toLowerCase(),
+    locator_value: element?.locator_value || step.element_locator || '',
+    locator_name: locatorOptions.name || step.element_locator_options?.name || '',
+    expanded: false
+  }
+})
+
+const selectTestCase = async (testCase) => {
   // 如果点击的是同一个用例，不做任何处理
   if (selectedTestCase.value && selectedTestCase.value.id === testCase.id) {
     return
   }
 
-  selectedTestCase.value = testCase
+  // 列表数据可能没有最新步骤，切换时读取详情确保元素关联信息完整。
+  let selected = testCase
+  try {
+    const response = await getTestCaseDetail(testCase.id)
+    selected = response.data
+  } catch (error) {
+    console.warn('获取测试用例详情失败，使用列表数据:', error)
+  }
+  selectedTestCase.value = selected
   // 确保步骤数据格式正确，添加前端需要的字段
-  if (testCase.steps && testCase.steps.length > 0) {
-    currentSteps.value = testCase.steps.map(step => ({
-      ...step,
-      element_id: step.element || '',
-      element_page: availableElements.value.find(element => element.id === step.element)?.page || '',
-      expanded: false
-    }))
+  if (selected.steps && selected.steps.length > 0) {
+    currentSteps.value = hydrateTestCaseSteps(selected.steps)
   } else {
     currentSteps.value = []
   }
@@ -722,13 +583,12 @@ const addStep = () => {
     assert_type: 'textContains',
     assert_value: '',
     description: '',
+    locator_strategy: 'role',
+    locator_value: '',
+    locator_name: '',
     expanded: true
   }
   currentSteps.value.push(newStep)
-}
-
-const removeStep = (index) => {
-  currentSteps.value.splice(index, 1)
 }
 
 const onStepsReorder = () => {
@@ -736,74 +596,11 @@ const onStepsReorder = () => {
   console.log('步骤已重新排序')
 }
 
-const onActionTypeChange = (step) => {
-  // 根据操作类型重置相关参数
-  if (!['fill', 'navigate', 'switchTab'].includes(step.action_type)) {
-    step.input_value = ''
-  }
-  if (step.action_type !== 'wait') {
-    step.wait_time = 1000
-  }
-  if (step.action_type !== 'assert') {
-    step.assert_type = 'textContains'
-    step.assert_value = ''
-  }
-  if (['navigate', 'wait', 'switchTab', 'screenshot'].includes(step.action_type)) {
-    step.element_id = ''
-    step.element_page = ''
-  }
-  if (step.action_type === 'assert' && step.assert_type === 'urlContains') {
-    step.element_id = ''
-    step.element_page = ''
-  }
-}
-
-const onAssertTypeChange = (step) => {
-  if (step.assert_type === 'urlContains') {
-    step.element_id = ''
-    step.element_page = ''
-  }
-}
-
-const onElementPageChange = (step) => {
-  const selectedElement = availableElements.value.find(element => element.id === step.element_id)
-  if (selectedElement && step.element_page && selectedElement.page !== step.element_page) {
-    step.element_id = ''
-  }
-}
-
-const onElementChange = (step) => {
-  // 元素变化时的处理
-  const element = availableElements.value.find(e => e.id === step.element_id)
-  if (element) step.element_page = element.page || ''
-  if (element && !step.description) {
-    step.description = `${getActionTypeText(step.action_type)}${element.name}`
-  }
-}
-
-const needsInputValue = (actionType) => {
-  return ['fill', 'switchTab', 'navigate'].includes(actionType)
-}
-
-const needsWaitTime = (actionType) => {
-  return ['wait', 'waitFor'].includes(actionType)
-}
-
-const needsElement = (step) => {
-  if (!step) return false
-  if (['wait', 'switchTab', 'screenshot', 'navigate'].includes(step.action_type)) return false
-  return !(step.action_type === 'assert' && step.assert_type === 'urlContains')
-}
-
-const getElementsForStep = (step) => {
-  if (!step?.element_page) return availableElements.value
-  return availableElements.value.filter(element => element.page === step.element_page)
-}
-
 const expandAllSteps = () => {
-  allStepsExpanded.value = !allStepsExpanded.value
+  // 先固定本次操作的目标状态，避免遍历时计算属性随单个步骤变化。
+  const expanded = !allStepsExpanded.value
   currentSteps.value.forEach(step => {
-    step.expanded = allStepsExpanded.value
+    step.expanded = expanded
   })
 }
 
@@ -813,18 +610,24 @@ const saveTestCase = async () => {
   try {
     const updateData = {
       ...selectedTestCase.value,
+      // 提交项目主键，避免把序列化后的项目对象传回步骤更新接口。
+      project: projectId.value,
       steps: currentSteps.value.map(({ expanded, element_page, ...step }) => step)
     }
 
     await updateTestCase(selectedTestCase.value.id, updateData)
+    // 保存后重新读取服务端步骤，确保元素、定位策略和定位器来自真实关联数据。
+    const detailResponse = await getTestCaseDetail(selectedTestCase.value.id)
+    const savedTestCase = detailResponse.data
+    currentSteps.value = hydrateTestCaseSteps(savedTestCase.steps || [])
     ElMessage.success(t('uiAutomation.testCase.save.success'))
 
     // 更新本地数据
     const index = testCases.value.findIndex(tc => tc.id === selectedTestCase.value.id)
     if (index !== -1) {
-      testCases.value[index] = { ...updateData }
-      selectedTestCase.value = { ...updateData }
+      testCases.value[index] = savedTestCase
     }
+    selectedTestCase.value = savedTestCase
   } catch (error) {
       console.error('保存测试用例失败:', error)
       ElMessage.error(t('uiAutomation.testCase.save.failed'))

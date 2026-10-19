@@ -155,6 +155,26 @@ export function updateTestScript(id, data) {
   })
 }
 
+// 只反解析代码并匹配已有元素；实际保存由编辑器接口统一完成。
+export function parseScriptSteps(id, content) {
+  return request({ url: `/ui-automation/test-scripts/${id}/parse-steps/`, method: 'post', data: { content } })
+}
+
+// 一次保存脚本、结构化步骤及对应的元素关联。
+export function saveScriptEditor(id, data) {
+  return request({ url: `/ui-automation/test-scripts/${id}/editor/`, method: 'put', data })
+}
+
+// 根据当前步骤生成 Playwright Python 代码，不修改已保存脚本。
+export function generateScriptCode(id, data) {
+  return request({ url: `/ui-automation/test-scripts/${id}/generate-code/`, method: 'post', data })
+}
+
+// 将已保存的同步步骤转换为 UI 测试用例。
+export function convertScriptToTestCase(id, data = {}) {
+  return request({ url: `/ui-automation/test-scripts/${id}/to-test-case/`, method: 'post', data })
+}
+
 // 删除测试脚本
 export function deleteTestScript(id) {
   return request({
@@ -624,10 +644,10 @@ export function deletePageObjectElement(id) {
   })
 }
 
-// 脚本步骤相关API
+// 脚本步骤相关API，与后端路由注册的 steps 路径保持一致。
 export function getScriptSteps(params) {
   return request({
-    url: '/ui-automation/script-steps/',
+    url: '/ui-automation/steps/',
     method: 'get',
     params
   })
@@ -635,7 +655,7 @@ export function getScriptSteps(params) {
 
 export function createScriptStep(data) {
   return request({
-    url: '/ui-automation/script-steps/',
+    url: '/ui-automation/steps/',
     method: 'post',
     data
   })
@@ -643,7 +663,7 @@ export function createScriptStep(data) {
 
 export function batchCreateScriptSteps(data) {
   return request({
-    url: '/ui-automation/script-steps/batch_create/',
+    url: '/ui-automation/steps/batch_create/',
     method: 'post',
     data
   })
@@ -651,7 +671,7 @@ export function batchCreateScriptSteps(data) {
 
 export function updateScriptStep(id, data) {
   return request({
-    url: `/ui-automation/script-steps/${id}/`,
+    url: `/ui-automation/steps/${id}/`,
     method: 'patch',
     data
   })
@@ -659,7 +679,7 @@ export function updateScriptStep(id, data) {
 
 export function deleteScriptStep(id) {
   return request({
-    url: `/ui-automation/script-steps/${id}/`,
+    url: `/ui-automation/steps/${id}/`,
     method: 'delete'
   })
 }
