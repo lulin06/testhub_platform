@@ -4,6 +4,8 @@ import ast
 import io
 import tokenize
 
+from .playwright_engine import playwright_locator_expression
+
 
 # Playwright 方法到结构化步骤动作的映射，前端只处理统一的 action_type。
 ACTION_MAP = {
@@ -220,23 +222,9 @@ def _py_literal(value):
 
 
 def _locator_code(locator):
-    strategy = locator.get('strategy', 'css')
-    value = locator.get('value', '')
-    options = locator.get('options') or {}
-    method = {
-        'role': 'get_by_role', 'label': 'get_by_label',
-        'placeholder': 'get_by_placeholder', 'text': 'get_by_text',
-        'test-id': 'get_by_test_id', 'title': 'get_by_title',
-        'alt-text': 'get_by_alt_text', 'css': 'locator', 'xpath': 'locator',
-    }.get(strategy, 'locator')
-    args = [_py_literal(value)]
-    args.extend(f'{key}={_py_literal(val)}' for key, val in options.items() if key not in {'first', 'nth'})
-    expression = f'page.{method}({", ".join(args)})'
-    if options.get('first'):
-        expression += '.first'
-    elif options.get('nth') is not None:
-        expression += f'.nth({options["nth"]})'
-    return expression
+    return playwright_locator_expression(
+        locator.get('strategy', 'css'), locator.get('value', ''), locator.get('options'),
+    )
 
 
 def generate_code(steps, start_url=''):

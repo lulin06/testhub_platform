@@ -4,14 +4,90 @@ Playwright自动化测试执行引擎
 """
 import asyncio
 import base64
+import json
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext, TimeoutError as PlaywrightTimeout
 import logging
-from .variable_resolver import resolve_variables
+from .variable_context import UiVariableContext, as_text
 
 logger = logging.getLogger(__name__)
+
+
+def _locator_spec(strategy, value, options):
+    options = dict(options or {})
+    first = options.pop('first', False)
+    nth = options.pop('nth', None)
+    strategy = strategy.lower()
+    method = {
+        'role': 'get_by_role',
+        'text': 'get_by_text',
+        'label': 'get_by_label',
+        'placeholder': 'get_by_placeholder',
+        'title': 'get_by_title',
+        'test-id': 'get_by_test_id',
+        'alt-text': 'get_by_alt_text',
+    }.get(strategy)
+    if method:
+        # 元素从 role 改为 placeholder 等策略时，库中可能仍保留旧的 name。
+        # 只传当前 Playwright 工厂支持的参数，避免历史选项造成 TypeError。
+        if strategy == 'role':
+            supported = {'checked', 'disabled', 'expanded', 'include_hidden', 'level',
+                         'name', 'pressed', 'selected', 'exact'}
+        elif strategy == 'test-id':
+            supported = set()
+        else:
+            supported = {'exact'}
+        options = {key: value for key, value in options.items() if key in supported}
+    else:
+        method = 'locator'
+        if strategy == 'id':
+            value = f'#{value}'
+        elif strategy == 'name':
+            value = f'[name="{value}"]'
+        elif strategy == 'xpath' and not value.startswith('xpath='):
+            value = f'xpath={value}'
+        supported = {'has_text', 'has_not_text', 'has', 'has_not'}
+        options = {key: value for key, value in options.items() if key in supported}
+    return method, value, options, first, nth
+
+
+def build_playwright_locator(page, strategy, value, options=None):
+    """Keep factory arguments separate from recorded positional selectors."""
+    method, value, options, first, nth = _locator_spec(strategy, value, options)
+    locator = getattr(page, method)(value, **options)
+    if first:
+        return locator.first
+    if nth is not None:
+        return locator.nth(nth)
+    return locator
+
+
+def playwright_locator_expression(strategy, value, options=None, *, page='page', language='python'):
+    """Export locators with the same semantics as runtime execution."""
+    method, value, options, first, nth = _locator_spec(strategy, value, options)
+    if language == 'javascript':
+        def camel_case(text):
+            head, *tail = text.split('_')
+            return head + ''.join(part.title() for part in tail)
+        args = [json.dumps(value, ensure_ascii=False)]
+        if options:
+            args.append(json.dumps({camel_case(key): val for key, val in options.items()}, ensure_ascii=False))
+        expression = f'{page}.{camel_case(method)}({", ".join(args)})'
+        if first:
+            expression += '.first()'
+        elif nth is not None:
+            expression += f'.nth({nth})'
+    else:
+        args = [repr(value), *(f'{key}={val!r}' for key, val in options.items())]
+        expression = f'{page}.{method}({", ".join(args)})'
+        if first:
+            expression += '.first'
+        elif nth is not None:
+            expression += f'.nth({nth})'
+    return expression
+
 
 class PlaywrightTestEngine:
     """Playwright测试执行引擎"""
@@ -30,6 +106,11 @@ class PlaywrightTestEngine:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        self.variables = UiVariableContext()
+
+    def initialize_variables(self, definitions, run=None):
+        """初始化当前执行上下文；套件执行时由调用方传入共享运行副本。"""
+        self.variables = UiVariableContext(definitions, run=run)
 
     @staticmethod
     def normalize_browser_type(browser_type='chromium'):
@@ -185,6 +266,8 @@ class PlaywrightTestEngine:
             logger.info("浏览器已关闭")
         except Exception as e:
             logger.error(f"关闭浏览器失败: {str(e)}")
+        finally:
+            self.variables.clear()
 
     async def execute_step(self, step, element_data: Dict) -> Tuple[bool, str, Optional[str]]:
         """
@@ -197,21 +280,45 @@ class PlaywrightTestEngine:
         Returns:
             (是否成功, 日志信息, 截图base64)
         """
+        success, log, screenshot = await self._execute_step(step, element_data)
+        if self.variables.strict:
+            # 每步记录脱敏后的项目变量快照，便于排查本次运行状态。
+            log += '\n  - 变量快照: ' + json.dumps(self.variables.snapshot(), ensure_ascii=False)
+        return success, self.variables.redact(log), screenshot
+
+    async def _execute_step(self, step, element_data: Dict) -> Tuple[bool, str, Optional[str]]:
+        """
+        执行单个测试步骤
+
+        Args:
+            step: 测试步骤对象
+            element_data: 元素数据字典 {locator_strategy, locator_value, name}
+
+        Returns:
+            (是否成功, 日志信息, 截图base64)
+        """
         action_type = step.action_type
         
-        # 预先解析变量
-        resolved_input_value = step.input_value
-        if step.input_value:
-            resolved_input_value = resolve_variables(step.input_value)
-            
-        resolved_assert_value = step.assert_value
-        if step.assert_value:
-            resolved_assert_value = resolve_variables(step.assert_value)
-            
         start_time = time.time()
         screenshot_base64 = None
+        element_name = element_data.get('name', '页面')
+        locator_strategy = element_data.get('locator_strategy', 'css')
+        locator_value = element_data.get('locator_value', '')
 
         try:
+            # 在动作开始时才解析参数，避免提前生成未执行步骤中的随机值。
+            rendered = self.variables.render_step({
+                'action_type': action_type,
+                'input_value': step.input_value,
+                'assert_value': step.assert_value,
+                'element': element_data,
+            })
+            variable_result = self.variables.apply_step(rendered)
+            if variable_result is not None:
+                return variable_result
+            resolved_input_value = as_text(rendered['input_value'])
+            resolved_assert_value = as_text(rendered['assert_value'])
+            element_data = rendered['element']
             if action_type == 'navigate':
                 if not resolved_input_value:
                     return False, "✗ 跳转URL失败: URL不能为空", None
@@ -337,51 +444,21 @@ class PlaywrightTestEngine:
             else:
                 timeout_ms = 5000  # 默认5秒
 
-            # 根据定位策略获取元素
-            if locator_strategy.lower() == 'id':
-                locator = self.page.locator(f'#{locator_value}')
-            elif locator_strategy.lower() in ['css', 'css selector']:
-                # CSS 定位器，对于可能匹配多个元素的情况，添加 .first
-                # 特别是下拉框选项，可能有多个同名选项
-                if any(keyword in locator_value.lower() for keyword in ['dropdown', 'el-select', ':has(', 'li']):
-                    # 如果是下拉框选项，强制只查找可见元素
-                    if 'visible=true' not in locator_value:
-                        locator = self.page.locator(f"{locator_value} >> visible=true").first
-                    else:
-                        locator = self.page.locator(locator_value).first
-                else:
-                    locator = self.page.locator(locator_value)
-            elif locator_strategy.lower() == 'xpath':
-                # XPath 定位器
-                # 如果是下拉框选项，强制只查找可见元素
-                if any(keyword in locator_value.lower() for keyword in ['dropdown', 'el-select', ':has(', 'li']):
-                    if 'visible=true' not in locator_value:
-                        locator = self.page.locator(f"xpath={locator_value} >> visible=true").first
-                    else:
-                        locator = self.page.locator(f"xpath={locator_value}").first
-                # 如果 XPath 已经包含索引 [n]，不要添加 .first（会冲突）
-                elif '[' in locator_value and ']' in locator_value:
-                    locator = self.page.locator(f'xpath={locator_value}')
-                else:
-                    # 如果没有索引，添加 .first 避免 strict mode violation
-                    locator = self.page.locator(f'xpath={locator_value}').first
-            elif locator_strategy.lower() == 'text':
-                locator = self.page.get_by_text(locator_value)
-            elif locator_strategy.lower() == 'name':
-                locator = self.page.locator(f'[name="{locator_value}"]')
-            elif locator_strategy.lower() == 'placeholder':
-                locator = self.page.get_by_placeholder(locator_value)
-            elif locator_strategy.lower() == 'role':
-                locator = self.page.get_by_role(locator_value)
-            elif locator_strategy.lower() == 'label':
-                locator = self.page.get_by_label(locator_value)
-            elif locator_strategy.lower() == 'title':
-                locator = self.page.get_by_title(locator_value)
-            elif locator_strategy.lower() == 'test-id':
-                locator = self.page.get_by_test_id(locator_value)
-            else:
-                # 默认使用CSS选择器
-                locator = self.page.locator(locator_value)
+            # 保留原有 CSS/XPath 可见性处理；显式 first/nth 优先于默认首项。
+            locator_options = dict(element_data.get('locator_options') or {})
+            value = locator_value
+            strategy = locator_strategy.lower()
+            if strategy in {'css', 'css selector', 'xpath'}:
+                dropdown = any(keyword in value.lower() for keyword in ['dropdown', 'el-select', ':has(', 'li'])
+                if dropdown:
+                    if 'visible=true' not in value:
+                        value += ' >> visible=true'
+                    if 'first' not in locator_options and 'nth' not in locator_options:
+                        locator_options['first'] = True
+                elif strategy == 'xpath' and not ('[' in value and ']' in value):
+                    if 'first' not in locator_options and 'nth' not in locator_options:
+                        locator_options['first'] = True
+            locator = build_playwright_locator(self.page, strategy, value, locator_options)
 
             # 执行操作
             execution_time = 0
@@ -394,7 +471,7 @@ class PlaywrightTestEngine:
                 )
 
                 # 对于原生HTML select的option，使用select_option方法
-                if is_native_select_option:
+                if is_native_select_option and not element_data.get('locator_options'):
                     logger.info(f"检测到原生HTML select元素，使用select_option方法...")
 
                     # 提取select的定位器和option的value
@@ -471,7 +548,7 @@ class PlaywrightTestEngine:
                                     'ancestor::' in locator_value.lower() and
                                     'el-select-dropdown' not in locator_value.lower())
                 
-                if is_select_trigger:
+                if is_select_trigger and not element_data.get('locator_options'):
                     # el-select 容器：点击内部的真正触发器，触发完整事件链
                     logger.info(f"检测到 el-select 容器，使用 Playwright 原生点击...")
                     try:
@@ -516,7 +593,7 @@ class PlaywrightTestEngine:
                             logger.error(f"所有点击方法都失败: {e2}")
                             raise
                 
-                elif is_dropdown_option:
+                elif is_dropdown_option and not element_data.get('locator_options'):
                     # 下拉框选项：需要特殊处理，确保能正确触发 Vue/Element Plus 的 v-model 更新
                     logger.info(f"检测到下拉框选项，使用 Playwright + Vue 数据更新策略...")
                     
@@ -725,10 +802,14 @@ class PlaywrightTestEngine:
 
             elif action_type == 'getText':
                 text = await locator.inner_text(timeout=timeout_ms)
+                if resolved_assert_value.strip():
+                    self.variables.set_temporary(resolved_assert_value, text)
                 execution_time = round(time.time() - start_time, 2)
                 log = f"✓ 获取元素 '{element_name}' 的文本成功\n"
                 log += f"  - 定位器: {locator_strategy}={locator_value}\n"
                 log += f"  - 文本内容: '{text}'\n"
+                if resolved_assert_value.strip():
+                    log += f"  - 已保存到临时变量: {resolved_assert_value}\n"
                 log += f"  - 超时设置: {timeout_ms/1000}秒\n"
                 log += f"  - 执行时间: {execution_time}秒"
                 return True, log, None

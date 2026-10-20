@@ -25,7 +25,10 @@ def validate_test_case_step_data(
     project_id=None,
 ):
     """校验 UI 测试步骤的动作、目标元素和参数之间的约束。"""
-    element_actions = {'click', 'fill', 'getText', 'waitFor', 'hover', 'scroll'}
+    element_actions = {
+        'click', 'fill', 'press', 'select', 'check', 'uncheck',
+        'getText', 'waitFor', 'hover', 'scroll',
+    }
 
     if action_type == 'navigate':
         url = str(input_value or '').strip()
@@ -71,13 +74,27 @@ class UiProjectSerializer(serializers.ModelSerializer):
 class UiProjectCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = UiProject
-        fields = ('name', 'description', 'status', 'base_url', 'start_date', 'end_date', 'owner', 'members')
+        fields = ('name', 'description', 'status', 'base_url', 'start_date', 'end_date', 'owner', 'members', 'variables')
+
+    def validate_variables(self, value):
+        from .variable_context import VariableError, validate_variables
+        try:
+            return validate_variables(value)
+        except VariableError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class UiProjectUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = UiProject
-        fields = ('name', 'description', 'status', 'base_url', 'start_date', 'end_date', 'members')
+        fields = ('name', 'description', 'status', 'base_url', 'start_date', 'end_date', 'members', 'variables')
+
+    def validate_variables(self, value):
+        from .variable_context import VariableError, validate_variables
+        try:
+            return validate_variables(value)
+        except VariableError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class LocatorStrategySerializer(serializers.ModelSerializer):

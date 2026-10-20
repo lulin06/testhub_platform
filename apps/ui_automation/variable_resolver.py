@@ -1,6 +1,6 @@
 """
-UI自动化测试变量解析器（已废弃，请使用 apps.core.variable_resolver）
-此文件保留用于向后兼容
+旧 UI 数据工厂解析兼容入口（保留 core 的宽松行为）
+新 UI 用例变量由 variable_context.UiVariableContext 独立处理
 """
 from apps.core.variable_resolver import VariableResolver, resolve_variables
 

@@ -3,9 +3,18 @@
     <div class="page-header">
       <h1 class="page-title">{{ t('uiAutomation.testCase.title') }}</h1>
       <div class="header-actions">
-        <el-select v-model="projectId" :placeholder="t('uiAutomation.project.selectProject')" style="width: 200px; margin-right: 15px" @change="onProjectChange">
+        <el-select v-model="projectId" :placeholder="t('uiAutomation.project.selectProject')" class="project-selector" @change="onProjectChange">
           <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
         </el-select>
+        <el-tooltip :content="t('uiAutomation.variables.selectProject')" :disabled="!!projectId">
+          <span>
+            <el-button :disabled="!projectId" @click="openVariablesDialog">
+              <el-icon><Setting /></el-icon>
+              {{ t('uiAutomation.variables.title') }}
+              <span v-if="currentVariables.length" class="variable-count">{{ currentVariables.length }}</span>
+            </el-button>
+          </span>
+        </el-tooltip>
         <el-button type="primary" @click="showCreateDialog = true">
           <el-icon><Plus /></el-icon>
           {{ t('uiAutomation.testCase.newTestCase') }}
@@ -262,6 +271,31 @@
       </ResizableSplitPane>
     </div>
 
+    <el-dialog
+      v-model="showVariablesDialog"
+      :title="t('uiAutomation.variables.title')"
+      width="min(1040px, calc(100vw - 40px))"
+      top="6vh"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!savingVariables"
+      :show-close="!savingVariables"
+      destroy-on-close
+      class="project-variables-dialog"
+    >
+      <div class="variables-case-heading">
+        <span>{{ t('uiAutomation.variables.currentProject') }}</span>
+        <strong>{{ projects.find(project => String(project.id) === String(projectId))?.name }}</strong>
+        <el-tag size="small" type="info">{{ variableDraft.length }}</el-tag>
+      </div>
+      <div class="variables-dialog-body">
+        <VariableEditor v-model="variableDraft" />
+      </div>
+      <template #footer>
+        <el-button :disabled="savingVariables" @click="showVariablesDialog = false">{{ t('uiAutomation.common.cancel') }}</el-button>
+        <el-button type="primary" :loading="savingVariables" @click="saveVariables">{{ t('uiAutomation.variables.save') }}</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 新建/编辑测试用例对话框 -->
     <el-dialog
       v-model="showCreateDialog"
@@ -366,10 +400,12 @@
 <script setup>
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import StructuredStepEditor from '@/components/ui-automation/StructuredStepEditor.vue'
+import VariableEditor from '@/components/ui-automation/VariableEditor.vue'
+import { loadUiVariables, formatUiVariables } from '@/utils/uiVariables'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Search, Plus, Edit, Delete, Check, CaretRight, Picture, Warning, View, ZoomIn, Refresh, WarningFilled, MagicStick
+  Search, Plus, Edit, Delete, Check, CaretRight, Picture, Warning, View, ZoomIn, Refresh, WarningFilled, MagicStick, Setting
 } from '@element-plus/icons-vue'
 import DataFactorySelector from '@/components/DataFactorySelector.vue'
 import { useI18n } from 'vue-i18n'
@@ -379,6 +415,7 @@ const leftPanelWidth = ref(350)
 
 import {
   getUiProjects,
+  updateUiProject,
   getElements,
   createTestCase,
   updateTestCase,
@@ -398,6 +435,10 @@ const projectId = ref('')
 const testCases = ref([])
 const selectedTestCase = ref(null)
 const currentSteps = ref([])
+const currentVariables = ref([])
+const showVariablesDialog = ref(false)
+const variableDraft = ref([])
+const savingVariables = ref(false)
 const availableElements = ref([])
 const pages = ref([])
 const searchKeyword = ref('')
@@ -520,6 +561,7 @@ const loadPages = async () => {
 const onProjectChange = async () => {
   selectedTestCase.value = null
   currentSteps.value = []
+  currentVariables.value = loadUiVariables(projects.value.find(project => String(project.id) === String(projectId.value))?.variables || [])
   executionResult.value = null
 
   await Promise.all([
@@ -541,6 +583,8 @@ const hydrateTestCaseSteps = (steps = []) => steps.map(step => {
     element_page: element?.page || step.element_page || '',
     locator_strategy: strategy.toLowerCase(),
     locator_value: element?.locator_value || step.element_locator || '',
+    locator_options: { ...locatorOptions },
+    locator_options_json: JSON.stringify(locatorOptions),
     locator_name: locatorOptions.name || step.element_locator_options?.name || '',
     expanded: false
   }
@@ -586,6 +630,8 @@ const addStep = () => {
     locator_strategy: 'role',
     locator_value: '',
     locator_name: '',
+    locator_options: {},
+    locator_options_json: '{}',
     expanded: true
   }
   currentSteps.value.push(newStep)
@@ -602,6 +648,32 @@ const expandAllSteps = () => {
   currentSteps.value.forEach(step => {
     step.expanded = expanded
   })
+}
+
+const openVariablesDialog = () => {
+  if (!projectId.value) return
+  variableDraft.value = structuredClone(formatUiVariables(currentVariables.value))
+  variableDraft.value = loadUiVariables(variableDraft.value)
+  showVariablesDialog.value = true
+}
+
+const saveVariables = async () => {
+  if (!projectId.value || savingVariables.value) return
+  savingVariables.value = true
+  try {
+    const variables = formatUiVariables(variableDraft.value)
+    // 单独 PATCH 项目变量，避免覆盖当前尚未保存的步骤编辑。
+    const response = await updateUiProject(projectId.value, { variables })
+    currentVariables.value = loadUiVariables(response.data.variables || variables)
+    const index = projects.value.findIndex(item => String(item.id) === String(projectId.value))
+    if (index !== -1) projects.value[index] = { ...projects.value[index], variables: response.data.variables || variables }
+    showVariablesDialog.value = false
+    ElMessage.success(t('uiAutomation.variables.saved'))
+  } catch (error) {
+    ElMessage.error(error.response?.data?.variables?.join?.(' / ') || error.message || t('uiAutomation.testCase.save.failed'))
+  } finally {
+    savingVariables.value = false
+  }
 }
 
 const saveTestCase = async () => {
@@ -630,7 +702,7 @@ const saveTestCase = async () => {
     selectedTestCase.value = savedTestCase
   } catch (error) {
       console.error('保存测试用例失败:', error)
-      ElMessage.error(t('uiAutomation.testCase.save.failed'))
+      ElMessage.error(error.response?.data?.variables?.join?.(' / ') || error.message || t('uiAutomation.testCase.save.failed'))
     }
 }
 
@@ -730,6 +802,7 @@ const deleteTestCase = async (testCase) => {
     if (selectedTestCase.value?.id === testCase.id) {
       selectedTestCase.value = null
       currentSteps.value = []
+      currentVariables.value = loadUiVariables(projects.value.find(project => String(project.id) === String(projectId.value))?.variables || [])
       executionResult.value = null
     }
   } catch (error) {
@@ -962,8 +1035,7 @@ const saveTestCaseForm = async () => {
       name: testCaseForm.name,
       description: testCaseForm.description,
       priority: testCaseForm.priority,
-      project: projectId.value,
-      steps: []
+      project: projectId.value
     }
 
     if (editingTestCase.value) {
@@ -975,6 +1047,9 @@ const saveTestCaseForm = async () => {
       const index = testCases.value.findIndex(tc => tc.id === editingTestCase.value.id)
       if (index !== -1) {
         testCases.value[index] = { ...testCases.value[index], ...data }
+      }
+      if (selectedTestCase.value?.id === editingTestCase.value.id) {
+        selectedTestCase.value = { ...selectedTestCase.value, ...data }
       }
     } else {
       // 创建新用例
@@ -1113,6 +1188,8 @@ onMounted(async () => {
   padding: 20px;
   border-bottom: 1px solid #e6e6e6;
   background: white;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .page-title {
@@ -1123,7 +1200,17 @@ onMounted(async () => {
 .header-actions {
   display: flex;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+
+.project-selector { width: 200px; }
+.header-actions :deep(.el-button + .el-button) { margin-left: 0; }
+.variable-count { margin-left: 6px; color: var(--el-color-primary); }
+.variables-case-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.variables-case-heading > span { color: var(--el-text-color-secondary); flex-shrink: 0; }
+.variables-case-heading strong { overflow-wrap: anywhere; }
+.variables-dialog-body { max-height: 65vh; overflow-y: auto; padding-right: 4px; }
 
 .main-content {
   flex: 1;
@@ -1242,6 +1329,8 @@ onMounted(async () => {
   margin-bottom: 20px;
   padding-bottom: 15px;
   border-bottom: 1px solid #e6e6e6;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
 .detail-header h3 {
@@ -1251,7 +1340,11 @@ onMounted(async () => {
 .detail-actions {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
 }
+
+.detail-actions :deep(.el-button + .el-button) { margin-left: 0; }
 
 .steps-container {
   flex: 1;

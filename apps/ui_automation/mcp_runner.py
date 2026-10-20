@@ -38,6 +38,7 @@ def _collect_steps_data(case):
                 'locator_strategy': (step.element.locator_strategy.name
                                      if step.element.locator_strategy else 'css'),
                 'locator_value': step.element.locator_value,
+                'locator_options': step.element.locator_options or {},
                 'name': step.element.name,
                 'wait_timeout': step.element.wait_timeout,
                 'force_action': step.element.force_action,
@@ -71,6 +72,8 @@ async def _run_playwright_async(execution, case, steps_data, browser, headless):
     step_results = []
     result = {'status': 'passed', 'error_message': None}
     try:
+        # MCP 单用例运行单独创建项目变量副本，不与其他执行共享状态。
+        engine.initialize_variables(case.project.variables)
         await engine.start()
         if case.project.base_url:
             success, nav_log = await engine.navigate(case.project.base_url)
@@ -90,6 +93,7 @@ async def _run_playwright_async(execution, case, steps_data, browser, headless):
                 'description': info['description'] or '',
                 'success': success,
                 'error': None if success else step_log,
+                **({'variables': engine.variables.snapshot()} if engine.variables.strict else {}),
             })
             if not success:
                 result['status'] = 'failed'
@@ -135,6 +139,8 @@ def _run_selenium_sync(execution, case, steps_data, browser, headless):
     step_results = []
     result = {'status': 'passed', 'error_message': None}
     try:
+        # 两种浏览器引擎均从用例定义初始化同一套 UI 变量上下文。
+        engine.initialize_variables(case.project.variables)
         engine.start()
         if case.project.base_url:
             success, nav_log = engine.navigate(case.project.base_url)
@@ -154,6 +160,7 @@ def _run_selenium_sync(execution, case, steps_data, browser, headless):
                 'description': info['description'] or '',
                 'success': success,
                 'error': None if success else step_log,
+                **({'variables': engine.variables.snapshot()} if engine.variables.strict else {}),
             })
             if not success:
                 result['status'] = 'failed'

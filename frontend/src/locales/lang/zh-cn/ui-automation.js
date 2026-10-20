@@ -1,4 +1,23 @@
 export default {
+  variables: {
+    title: '变量管理',
+    hint: '项目变量在每次运行开始时初始化；运行期间的临时值只作用于本次运行副本。',
+    name: '名称',
+    type: '类型',
+    value: '初始值',
+    description: '说明',
+    remove: '删除',
+    add: '添加变量',
+    selectProject: '请先选择一个项目',
+    currentProject: '当前项目',
+    save: '保存变量',
+    saved: '项目变量已保存',
+    empty: '暂无变量，点击“添加变量”开始配置',
+    descriptionPlaceholder: '说明变量的用途（选填）',
+    syntax: '引用示例',
+    moveUp: '上移',
+    moveDown: '下移'
+  },
   // 仪表板
   dashboard: {
     uiTestProjects: 'UI测试项目',
@@ -217,6 +236,9 @@ export default {
     forceActionTip: '对于 visibility:hidden 的元素，启用此选项可强制执行操作',
     locatorExpression: '定位表达式',
     locatorExpressionPlaceholder: '请输入定位表达式',
+    locatorOptions: '定位选项',
+    locatorOptionsPlaceholder: '请输入 JSON 对象，例如 {"name":"登录","exact":true}',
+    locatorOptionsInvalid: '定位选项必须是有效的 JSON 对象',
     descriptionPlaceholder: '请输入元素描述',
     debugInfo: '调试',
     currentValue: '当前值',

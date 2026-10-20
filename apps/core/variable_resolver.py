@@ -119,6 +119,12 @@ class VariableResolver:
             'date_offset': self._date_offset,
         }
     
+    def _extract_result(self, result):
+        """保持原有结果解包行为，并允许 UI 在解包前检查工具错误。"""
+        if isinstance(result, dict) and 'result' in result:
+            return result['result']
+        return result
+
     def resolve(self, text):
         """解析文本中的动态函数占位符
         
@@ -329,9 +335,7 @@ class VariableResolver:
             result = tool_mapping[func_name](**kwargs)
         
         # 提取 result 字段
-        if isinstance(result, dict) and 'result' in result:
-            return result['result']
-        return result
+        return self._extract_result(result)
     
     def _call_test_data_tool(self, func_name, args):
         """调用测试数据工具"""
@@ -368,9 +372,7 @@ class VariableResolver:
             result = tool_mapping[func_name](**kwargs)
         
         # 提取 result 字段
-        if isinstance(result, dict) and 'result' in result:
-            return result['result']
-        return result
+        return self._extract_result(result)
     
     def _call_string_tool(self, func_name, args):
         """调用字符工具"""
@@ -399,9 +401,7 @@ class VariableResolver:
             result = tool_mapping[func_name](**kwargs)
         
         # 提取 result 字段
-        if isinstance(result, dict) and 'result' in result:
-            return result['result']
-        return result
+        return self._extract_result(result)
     
     def _call_encoding_tool(self, func_name, args):
         """调用编码工具"""
@@ -457,9 +457,7 @@ class VariableResolver:
             result = tool_mapping[func_name](**kwargs)
             
             # 提取 result 字段
-            if isinstance(result, dict) and 'result' in result:
-                return result['result']
-            return result
+            return self._extract_result(result)
         
         return None
     
@@ -494,9 +492,7 @@ class VariableResolver:
             result = tool_mapping[func_name](**kwargs)
         
         # 提取 result 字段
-        if isinstance(result, dict) and 'result' in result:
-            return result['result']
-        return result
+        return self._extract_result(result)
     
     def _call_crontab_tool(self, func_name, args):
         """调用Crontab工具"""
@@ -527,9 +523,9 @@ class VariableResolver:
         if func_name in tool_mapping:
             result = tool_mapping[func_name](**kwargs)
             
-            # 提取 result 字段
             if isinstance(result, dict) and 'result' in result:
-                return result['result']
+                return self._extract_result(result)
+            result = self._extract_result(result)
             # 对于Crontab工具，可能返回expression字段
             if isinstance(result, dict) and 'expression' in result:
                 return result['expression']
