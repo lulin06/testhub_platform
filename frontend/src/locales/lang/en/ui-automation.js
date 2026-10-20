@@ -1,4 +1,23 @@
 export default {
+  variables: {
+    title: 'Variable management',
+    hint: 'Project variables initialize at the start of each run; temporary values only affect that run copy.',
+    name: 'Name',
+    type: 'Type',
+    value: 'Initial value',
+    description: 'Description',
+    remove: 'Delete',
+    add: 'Add variable',
+    selectProject: 'Select a project first',
+    currentProject: 'Current project',
+    save: 'Save variables',
+    saved: 'Project variables saved',
+    empty: 'No variables yet. Add a variable to get started.',
+    descriptionPlaceholder: 'Describe its purpose (optional)',
+    syntax: 'Reference examples',
+    moveUp: 'Move up',
+    moveDown: 'Move down'
+  },
   // Dashboard
   dashboard: {
     uiTestProjects: 'UI Test Projects',
@@ -217,6 +236,9 @@ export default {
     forceActionTip: 'Enable this option to force action on visibility:hidden elements',
     locatorExpression: 'Locator Expression',
     locatorExpressionPlaceholder: 'Please enter locator expression',
+    locatorOptions: 'Locator Options',
+    locatorOptionsPlaceholder: 'Enter a JSON object, e.g. {"name":"Login","exact":true}',
+    locatorOptionsInvalid: 'Locator options must be a valid JSON object',
     descriptionPlaceholder: 'Please enter element description',
     debugInfo: 'Debug',
     currentValue: 'Current Value',

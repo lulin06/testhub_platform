@@ -205,6 +205,10 @@
                 </div>
               </el-form-item>
 
+              <el-form-item :label="$t('uiAutomation.element.locatorOptions')">
+                <el-input v-model="selectedElement.locator_options_json" type="textarea" :rows="3" :placeholder="$t('uiAutomation.element.locatorOptionsPlaceholder')" @blur="validateLocatorOptions" />
+              </el-form-item>
+
               <el-form-item :label="$t('uiAutomation.common.description')">
                 <el-input v-model="selectedElement.description" type="textarea" :rows="3" :placeholder="$t('uiAutomation.element.descriptionPlaceholder')" />
               </el-form-item>
@@ -769,6 +773,8 @@ const createEmptyElement = () => {
     component_name: '',
     locator_strategy_id: null, // 使用null而不是空字符串
     locator_value: '',
+    locator_options: {},
+    locator_options_json: '{}',
     wait_timeout: 5,
     force_action: false,  // 强制操作选项，默认禁用
     description: ''
@@ -856,7 +862,11 @@ const onNodeClick = async (data) => {
   if (data.type === 'element') {
     try {
       const response = await getElementDetail(data.id)
-      selectedElement.value = response.data
+      selectedElement.value = {
+        ...response.data,
+        locator_options: response.data.locator_options || {},
+        locator_options_json: JSON.stringify(response.data.locator_options || {}, null, 2)
+      }
 
       // 强制刷新表单，确保下拉框正确显示
       formKey.value += 1
@@ -864,6 +874,20 @@ const onNodeClick = async (data) => {
     } catch (error) {
       console.error('获取元素详情失败:', error)
     }
+  }
+}
+
+const validateLocatorOptions = () => {
+  if (!selectedElement.value) return true
+  try {
+    const parsed = JSON.parse(selectedElement.value.locator_options_json || '{}')
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error()
+    selectedElement.value.locator_options = parsed
+    selectedElement.value.locator_options_json = JSON.stringify(parsed, null, 2)
+    return true
+  } catch {
+    ElMessage.error(t('uiAutomation.element.locatorOptionsInvalid'))
+    return false
   }
 }
 
@@ -952,6 +976,7 @@ const copyElementNode = async (node) => {
       element_type: source.element_type || 'BUTTON',
       locator_strategy_id: source.locator_strategy_id || source.locator_strategy?.id,
       locator_value: source.locator_value || '',
+      locator_options: source.locator_options || {},
       wait_timeout: source.wait_timeout || 5,
       force_action: Boolean(source.force_action),
       is_unique: Boolean(source.is_unique),
@@ -1036,6 +1061,7 @@ const saveElement = async () => {
     ElMessage.error(t('uiAutomation.element.messages.saveFailed'))
     return
   }
+  if (!validateLocatorOptions()) return
 
   try {
     saving.value = true
@@ -1052,6 +1078,7 @@ const saveElement = async () => {
         description: selectedElement.value.description,
         locator_strategy_id: selectedElement.value.locator_strategy_id,
         locator_value: selectedElement.value.locator_value,
+        locator_options: selectedElement.value.locator_options || {},
         wait_timeout: selectedElement.value.wait_timeout,
         force_action: selectedElement.value.force_action,
         project_id: selectedProject.value
@@ -1086,7 +1113,7 @@ const saveElement = async () => {
 
       // 重新获取完整的元素详情以确保所有关联字段正确显示
       const detailResponse = await getElementDetail(selectedElement.value.id)
-      selectedElement.value = detailResponse.data
+      selectedElement.value = { ...detailResponse.data, locator_options_json: JSON.stringify(detailResponse.data.locator_options || {}, null, 2) }
       console.log('更新后获取到完整元素详情:', selectedElement.value)
       console.log('locator_strategy_id值:', selectedElement.value.locator_strategy_id, '类型:', typeof selectedElement.value.locator_strategy_id)
       console.log('locator_strategy对象:', selectedElement.value.locator_strategy)
@@ -1108,6 +1135,7 @@ const saveElement = async () => {
       // 确保传递正确的字段名 project_id 而不是 project
       const elementData = {
         ...selectedElement.value,
+        locator_options: selectedElement.value.locator_options || {},
         project_id: selectedProject.value
       }
 
@@ -1150,7 +1178,7 @@ const saveElement = async () => {
 
       // 重新获取完整的元素详情以确保所有关联字段正确显示
       const detailResponse = await getElementDetail(response.data.id)
-      selectedElement.value = detailResponse.data
+      selectedElement.value = { ...detailResponse.data, locator_options_json: JSON.stringify(detailResponse.data.locator_options || {}, null, 2) }
       console.log('获取到完整元素详情:', selectedElement.value)
       console.log('locator_strategy_id值:', selectedElement.value.locator_strategy_id, '类型:', typeof selectedElement.value.locator_strategy_id)
       console.log('locator_strategy对象:', selectedElement.value.locator_strategy)

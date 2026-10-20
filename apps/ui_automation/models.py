@@ -4,6 +4,7 @@ from django.utils import timezone
 import json
 from apps.projects.models import Project
 from apps.projects.managers import ActiveProjectManager
+from .playwright_engine import playwright_locator_expression
 
 User = get_user_model()
 
@@ -20,6 +21,8 @@ class UiProject(models.Model):
     description = models.TextField(blank=True, verbose_name='项目描述')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name='项目状态', default='IN_PROGRESS')
     base_url = models.URLField(verbose_name='基础URL')
+    # 项目级变量定义；每次执行会复制到独立的运行上下文，不直接修改此字段。
+    variables = models.JSONField(default=list, blank=True, verbose_name='项目变量')
     start_date = models.DateField(null=True, blank=True, verbose_name='开始日期')
     end_date = models.DateField(null=True, blank=True, verbose_name='结束日期')
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_ui_projects', verbose_name='负责人')
@@ -278,14 +281,18 @@ class PageObject(models.Model):
 
         for po_element in elements:
             element = po_element.element
+            expression = playwright_locator_expression(
+                element.locator_strategy.name, element.locator_value, element.locator_options,
+                language='javascript', page='page' if po_element.is_property else 'this.page',
+            )
             if po_element.is_property:
                 element_props.append(
-                    f"        this.{po_element.method_name} = page.locator('{element.locator_value}');"
+                    f"        this.{po_element.method_name} = {expression};"
                 )
             else:
                 methods.append(f"""
     async {po_element.method_name}() {{
-        return this.page.locator('{element.locator_value}');
+        return {expression};
     }}""")
 
         template = f"""
@@ -307,9 +314,13 @@ class {self.class_name} {{
         methods = []
         for po_element in elements:
             element = po_element.element
+            expression = playwright_locator_expression(
+                element.locator_strategy.name, element.locator_value, element.locator_options,
+                page='self.page',
+            )
             methods.append(f"""
     def {po_element.method_name}(self):
-        return self.page.locator('{element.locator_value}')""")
+        return {expression}""")
 
         template = f"""
 class {self.class_name}:
@@ -653,7 +664,6 @@ class TestCase(models.Model):
     def __str__(self):
         return self.name
 
-
 class TestCaseStep(models.Model):
     """测试用例步骤模型"""
     ACTION_TYPE_CHOICES = [
@@ -672,6 +682,7 @@ class TestCaseStep(models.Model):
         ('wait', '等待'),
         ('switchTab', '切换标签页'),
         ('navigate', '跳转URL'),
+        ('setVariable', '设置临时变量'),
     ]
 
     ASSERT_TYPE_CHOICES = [

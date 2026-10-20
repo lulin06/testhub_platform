@@ -4,7 +4,8 @@ Selenium自动化测试执行引擎
 """
 import base64
 import time
-from .variable_resolver import resolve_variables
+import json
+from .variable_context import UiVariableContext, VariableError, as_text
 import os
 import shutil
 from datetime import datetime
@@ -34,6 +35,11 @@ class SeleniumTestEngine:
         self.browser_type = browser_type
         self.headless = headless
         self.driver = None
+        self.variables = UiVariableContext()
+
+    def initialize_variables(self, definitions, run=None):
+        """初始化当前执行变量；套件执行时复用执行器的运行副本。"""
+        self.variables = UiVariableContext(definitions, run=run)
 
     @staticmethod
     def check_browser_available(browser_type='chrome'):
@@ -351,6 +357,8 @@ class SeleniumTestEngine:
             logger.info("浏览器已关闭")
         except Exception as e:
             logger.error(f"关闭浏览器失败: {str(e)}")
+        finally:
+            self.variables.clear()
 
     def _get_locator(self, locator_strategy: str, locator_value: str) -> Tuple[str, str]:
         """
@@ -411,18 +419,34 @@ class SeleniumTestEngine:
         Returns:
             (是否成功, 日志信息, 截图base64)
         """
+        try:
+            # 与 Playwright 使用同一渲染器，保证变量解析和类型处理一致。
+            rendered = self.variables.render_step({
+                'action_type': step.action_type,
+                'input_value': step.input_value,
+                'assert_value': step.assert_value,
+                'element': element_data,
+            })
+            variable_result = self.variables.apply_step(rendered)
+            if variable_result is not None:
+                success, log, screenshot = variable_result
+                if self.variables.strict:
+                    log += '\n  - 变量快照: ' + json.dumps(self.variables.snapshot(), ensure_ascii=False)
+                return success, self.variables.redact(log), screenshot
+            success, log, screenshot = self._execute_step(
+                step, rendered['element'], as_text(rendered['input_value']),
+                as_text(rendered['assert_value']))
+        except VariableError as exc:
+            success, log, screenshot = False, f'变量解析失败: {exc}', None
+        if self.variables.strict:
+            log += '\n  - 变量快照: ' + json.dumps(self.variables.snapshot(), ensure_ascii=False)
+        return success, self.variables.redact(log), screenshot
+
+    def _execute_step(self, step, element_data, resolved_input_value, resolved_assert_value):
+        """使用已解析的步骤参数执行 Selenium 动作。"""
         print(f"\n🔵 开始执行步骤: action_type={step.action_type}")
         action_type = step.action_type
         
-        # 预先解析变量
-        resolved_input_value = step.input_value
-        if step.input_value:
-            resolved_input_value = resolve_variables(step.input_value)
-            
-        resolved_assert_value = step.assert_value
-        if step.assert_value:
-            resolved_assert_value = resolve_variables(step.assert_value)
-            
         start_time = time.time()
         screenshot_base64 = None
 
@@ -531,7 +555,7 @@ class SeleniumTestEngine:
 
             # 其他操作需要元素定位器
             locator_strategy = element_data.get('locator_strategy', 'css')
-            locator_value = element_data.get('locator_value', '')
+            locator_value = as_text(element_data.get('locator_value', ''))
             element_name = element_data.get('name', '未知元素')
 
             # 获取强制操作选项
@@ -661,7 +685,8 @@ class SeleniumTestEngine:
                     try:
                         if force_action or not element.is_displayed():
                             # 使用JavaScript设置值
-                            self.driver.execute_script(f"arguments[0].value = '{resolved_input_value}';", element)
+                            # 通过脚本参数传值，避免引号或反斜杠破坏 JavaScript 字符串。
+                            self.driver.execute_script("arguments[0].value = arguments[1];", element, resolved_input_value)
                             # 触发input和change事件
                             self.driver.execute_script("""
                                 arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
@@ -713,10 +738,14 @@ class SeleniumTestEngine:
                 for attempt in range(max_retries):
                     try:
                         text = element.text
+                        if resolved_assert_value.strip():
+                            self.variables.set_temporary(resolved_assert_value, text)
                         execution_time = round(time.time() - start_time, 2)
                         log = f"✓ 获取元素 '{element_name}' 的文本成功\n"
                         log += f"  - 定位器: {locator_strategy}={locator_value}\n"
                         log += f"  - 文本内容: '{text}'\n"
+                        if resolved_assert_value.strip():
+                            log += f"  - 已保存到临时变量: {resolved_assert_value}\n"
                         log += f"  - 超时设置: {timeout_seconds}秒\n"
                         log += f"  - 执行时间: {execution_time}秒"
                         return True, log, None

@@ -418,9 +418,11 @@ const editScript = async (script) => {
       }))
     }
     editingSteps.value = rawSteps.map(step => {
-      const locator = step.action_params?.locator || {}
       const element = step.target_element
-      const strategyName = locator.strategy || element?.locator_strategy?.name?.toLowerCase() || 'role'
+      const locator = element
+        ? { strategy: element.locator_strategy?.name?.toLowerCase(), value: element.locator_value, options: element.locator_options || {} }
+        : (step.action_params?.locator || {})
+      const strategyName = locator.strategy || 'role'
       return {
         ...step,
         action_type: normalizeAction(step.action_type),
@@ -429,6 +431,8 @@ const editScript = async (script) => {
         element_page: element?.page || '',
         locator_strategy: strategyName,
         locator_value: locator.value || element?.locator_value || '',
+        locator_options: { ...(locator.options || element?.locator_options || {}) },
+        locator_options_json: JSON.stringify(locator.options || element?.locator_options || {}),
         locator_name: locator.options?.name || element?.locator_options?.name || '',
         input_value: step.input_value || '',
         wait_time: step.wait_time || 1000,
@@ -486,8 +490,7 @@ const editorStepPayload = () => editingSteps.value.map(step => ({
       strategy: step.locator_strategy,
       value: step.locator_value,
       options: {
-        ...(step.action_params?.locator?.options || {}),
-        ...(step.locator_name ? { name: step.locator_name } : {})
+        ...(step.locator_options || step.action_params?.locator?.options || {})
       }
     } : step.action_params?.locator
   }
@@ -523,7 +526,9 @@ const parseCode = async () => {
       element_page: step.target_element?.page || '', target_element: step.target_element || null,
       locator_strategy: step.action_params?.locator?.strategy || step.target_element?.locator_strategy?.name?.toLowerCase() || 'role',
       locator_value: step.action_params?.locator?.value || '',
-      locator_name: step.action_params?.locator?.options?.name || '', expanded: true
+      locator_options: { ...(step.action_params?.locator?.options || step.target_element?.locator_options || {}) },
+      locator_options_json: JSON.stringify(step.action_params?.locator?.options || step.target_element?.locator_options || {}),
+      locator_name: step.action_params?.locator?.options?.name || step.target_element?.locator_options?.name || '', expanded: true
     }))
     if (response.data.start_url) editingScript.value.start_url = response.data.start_url
     syncState.value = 'synced'

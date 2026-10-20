@@ -70,7 +70,7 @@ LOCATOR_STRATEGY_NAMES = {
     'css': 'CSS', 'css selector': 'CSS', 'xpath': 'XPath', 'id': 'ID',
     'name': 'name', 'class': 'class', 'tag': 'tag', 'text': 'text',
     'placeholder': 'placeholder', 'role': 'role', 'label': 'label',
-    'title': 'title', 'test-id': 'test-id', 'alt-text': 'text',
+    'title': 'title', 'test-id': 'test-id', 'alt-text': 'alt-text',
 }
 
 
@@ -457,6 +457,7 @@ class ElementViewSet(viewsets.ModelViewSet):
                 'element_type': element.element_type,
                 'locator_strategy': element.locator_strategy.name if element.locator_strategy else None,
                 'locator_value': element.locator_value,
+                'locator_options': element.locator_options or {},
                 'validation_status': element.validation_status,
                 'usage_count': element.usage_count,
                 'order': element.order,
@@ -1671,6 +1672,8 @@ class TestCaseViewSet(viewsets.ModelViewSet):
         elif step.action_type == 'getText':
             log_parts.append(f"获取元素 '{element_name}' 的文本内容")
             log_parts.append(f"- 使用定位器: {locator_info}")
+            if step.assert_value:
+                log_parts.append(f"- 保存到临时变量: '{step.assert_value}'")
             if step_result == 'success':
                 # 模拟获取到的文本
                 mock_text = f"示例文本内容_{step.id}" if step.id else "示例文本内容"
@@ -1921,6 +1924,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                     step_data['element_data'] = {
                         'locator_strategy': step.element.locator_strategy.name if step.element.locator_strategy else 'css',
                         'locator_value': step.element.locator_value,
+                        'locator_options': step.element.locator_options or {},
                         'name': step.element.name,
                         'wait_timeout': step.element.wait_timeout,  # 添加元素的等待超时设置（秒）
                         'force_action': step.element.force_action  # 添加强制操作选项
@@ -1964,6 +1968,8 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                     engine = SeleniumTestEngine(browser_type=browser_type, headless=headless)
 
                     try:
+                        # 单用例运行使用独立项目变量副本。
+                        engine.initialize_variables(test_case.project.variables)
                         # 启动浏览器
                         execution_logs.append("========== 初始化浏览器 ==========")
                         try:
@@ -2045,7 +2051,9 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                                         'action_type': action_type,
                                         'description': description or '',
                                         'success': success,
-                                        'error': None if success else step_log
+                                        'error': None if success else step_log,
+                                        # 仅新变量用例附加脱敏快照，保持旧执行记录结构不变。
+                                        **({'variables': engine.variables.snapshot()} if engine.variables.strict else {})
                                     })
 
                                     if not success:
@@ -2137,6 +2145,14 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                             execution_logs.append("警告: 测试用例没有定义任何步骤")
                             return True
 
+                    except Exception as exc:
+                        # 定义初始化失败时也生成可读的失败步骤，不启动后续动作。
+                        execution_result['status'] = 'failed'
+                        execution_result['error_message'] = engine.variables.redact(str(exc))
+                        execution_logs.append(execution_result['error_message'])
+                        step_results.append({'step_number': 0, 'action_type': 'initializeVariables',
+                                             'success': False, 'error': execution_result['error_message']})
+                        return False
                     finally:
                         execution_logs.append("")
                         execution_logs.append("========== 清理资源 ==========")
@@ -2170,6 +2186,8 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                         engine = PlaywrightTestEngine(browser_type=browser_type, headless=headless)
 
                         try:
+                            # 单用例入口每次创建独立变量副本，不继承其他运行状态。
+                            engine.initialize_variables(test_case.project.variables)
                             # 启动浏览器
                             execution_logs.append("========== 初始化浏览器 ==========")
                             await engine.start()
@@ -2237,7 +2255,8 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                                             'action_type': action_type,
                                             'description': description or '',
                                             'success': success,
-                                            'error': None if success else step_log
+                                            'error': None if success else step_log,
+                                            **({'variables': engine.variables.snapshot()} if engine.variables.strict else {})
                                         })
 
                                         # 如果步骤失败,保存截图
@@ -2344,6 +2363,13 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                                 execution_logs.append("警告: 测试用例没有定义任何步骤")
                                 return True
 
+                        except Exception as exc:
+                            execution_result['status'] = 'failed'
+                            execution_result['error_message'] = engine.variables.redact(str(exc))
+                            execution_logs.append(execution_result['error_message'])
+                            step_results.append({'step_number': 0, 'action_type': 'initializeVariables',
+                                                 'success': False, 'error': execution_result['error_message']})
+                            return False
                         finally:
                             # 关闭浏览器
                             execution_logs.append("")
@@ -2741,7 +2767,7 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                     }, status=status.HTTP_400_BAD_REQUEST)
 
                 test_case_ids = task.test_cases
-                test_cases = TestCase.objects.filter(id__in=test_case_ids)
+                test_cases = TestCase.objects.filter(id__in=test_case_ids).select_related('project')
                 test_case_count = test_cases.count()
 
                 if test_case_count == 0:
@@ -2807,6 +2833,7 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                         step_data['element_data'] = {
                                             'locator_strategy': step.element.locator_strategy.name if step.element.locator_strategy else 'css',
                                             'locator_value': step.element.locator_value,
+                                            'locator_options': step.element.locator_options or {},
                                             'name': step.element.name,
                                             'wait_timeout': step.element.wait_timeout,
                                             'force_action': step.element.force_action
@@ -2847,6 +2874,8 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                     engine = SeleniumTestEngine(browser_type=task.browser, headless=task.headless)
 
                                     try:
+                                        # 每个定时单用例任务使用独立项目变量副本。
+                                        engine.initialize_variables(test_case.project.variables)
                                         # 启动浏览器
                                         engine.start()
                                         execution_logs.append("✓ 浏览器启动成功")
@@ -2874,7 +2903,8 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                                 'action_type': action_type,
                                                 'description': step_info['description'] or '',
                                                 'success': success,
-                                                'error': None if success else step_log
+                                                'error': None if success else step_log,
+                                                **({'variables': engine.variables.snapshot()} if engine.variables.strict else {})
                                             })
 
                                             if not success:
@@ -2922,6 +2952,8 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                         engine = PlaywrightTestEngine(browser_type=browser_type, headless=task.headless)
 
                                         try:
+                                            # 定时任务的每个独立用例都创建自己的变量上下文。
+                                            engine.initialize_variables(test_case.project.variables)
                                             # 启动浏览器
                                             await engine.start()
                                             execution_logs.append("✓ 浏览器启动成功")
@@ -2952,7 +2984,8 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                                     'action_type': action_type,
                                                     'description': step_info['description'] or '',
                                                     'success': success,
-                                                    'error': None if success else step_log
+                                                    'error': None if success else step_log,
+                                                    **({'variables': engine.variables.snapshot()} if engine.variables.strict else {})
                                                 })
 
                                                 if not success:

@@ -26,17 +26,24 @@
           </header>
           <div v-if="element.expanded" class="step-content">
           <div v-if="needsElement(element)" class="step-field locator-field">
-            <el-select v-model="element.locator_strategy" size="small" placeholder="定位策略" @change="onLocatorChange(element)">
+            <el-select v-model="element.locator_strategy" size="small" placeholder="定位策略" :disabled="hasElement(element)" @change="onLocatorChange(element)">
               <el-option v-for="strategy in strategies" :key="strategy" :label="strategy" :value="strategy" />
             </el-select>
-            <el-input v-model="element.locator_value" size="small" placeholder="定位器" @input="emitSteps" />
-            <el-input v-if="element.locator_strategy === 'role'" v-model="element.locator_name" size="small" placeholder="名称（可选）" @input="emitSteps" />
+            <el-input v-model="element.locator_value" size="small" placeholder="定位器" :disabled="hasElement(element)" @input="emitSteps" />
+            <el-input v-if="element.locator_strategy === 'role'" v-model="element.locator_name" size="small" placeholder="名称（可选）" :disabled="hasElement(element)" @input="onLocatorNameInput(element)" />
           </div>
-          <div v-if="needsInput(element.action_type)" class="step-field">
+          <div v-if="element.action_type === 'setVariable'" class="step-field variable-set-field">
+            <el-input v-model="element.input_value" size="small" placeholder="变量名" @input="emitSteps" />
+            <el-input v-model="element.assert_value" size="small" placeholder="变量值" @input="emitSteps" />
+          </div>
+          <div v-else-if="element.action_type === 'getText'" class="step-field">
+            <el-input v-model="element.assert_value" size="small" placeholder="保存到临时变量（可选）" @input="emitSteps" />
+          </div>
+          <div v-else-if="needsInput(element.action_type)" class="step-field">
             <el-input v-model="element.input_value" size="small" :placeholder="element.action_type === 'navigate' ? 'URL' : '输入值'" @input="emitSteps">
-              <template v-if="helperActions" #append><el-button :icon="MagicStick" @click="emit('helper', { step: element, field: 'input_value' })" /></template>
+              <template v-if="helperActions" #append><el-button class="data-factory-button" size="small" :icon="MagicStick" title="选择数据工厂数据" @click="emit('helper', { step: element, field: 'input_value' })" /></template>
             </el-input>
-            <el-button v-if="helperActions && element.action_type !== 'switchTab'" size="small" @click="emit('variable', { step: element, field: 'input_value' })"><el-icon><MagicStick /></el-icon></el-button>
+            <el-button v-if="helperActions && element.action_type !== 'switchTab'" class="variable-helper-button" size="small" @click="emit('variable', { step: element, field: 'input_value' })"><el-icon><MagicStick /></el-icon></el-button>
           </div>
           <div v-if="['wait', 'waitFor'].includes(element.action_type)" class="step-field">
             <el-input-number v-model="element.wait_time" :min="100" :max="30000" :step="100" size="small" @change="emitSteps" />
@@ -48,9 +55,9 @@
               <el-option label="URL包含" value="urlContains" />
             </el-select>
             <el-input v-model="element.assert_value" size="small" placeholder="断言值" @input="emitSteps">
-              <template v-if="helperActions" #append><el-button :icon="MagicStick" @click="emit('helper', { step: element, field: 'assert_value' })" /></template>
+              <template v-if="helperActions" #append><el-button class="data-factory-button" size="small" :icon="MagicStick" title="选择数据工厂数据" @click="emit('helper', { step: element, field: 'assert_value' })" /></template>
             </el-input>
-            <el-button v-if="helperActions" size="small" @click="emit('variable', { step: element, field: 'assert_value' })"><el-icon><MagicStick /></el-icon></el-button>
+            <el-button v-if="helperActions" class="variable-helper-button" size="small" @click="emit('variable', { step: element, field: 'assert_value' })"><el-icon><MagicStick /></el-icon></el-button>
           </div>
           <div class="step-field description-field">
             <el-input v-model="element.description" size="small" placeholder="步骤描述" @input="emitSteps" />
@@ -84,7 +91,8 @@ const actions = [
   { value: 'select', label: '选择选项' }, { value: 'check', label: '勾选' }, { value: 'uncheck', label: '取消勾选' },
   { value: 'hover', label: '悬停' }, { value: 'getText', label: '获取文本' }, { value: 'waitFor', label: '等待元素' },
   { value: 'scroll', label: '滚动' }, { value: 'screenshot', label: '截图' }, { value: 'assert', label: '断言' },
-  { value: 'wait', label: '等待' }, { value: 'switchTab', label: '切换标签页' }, { value: 'navigate', label: '跳转URL' }
+  { value: 'wait', label: '等待' }, { value: 'switchTab', label: '切换标签页' }, { value: 'navigate', label: '跳转URL' },
+  { value: 'setVariable', label: '设置临时变量' }
 ]
 // 使用 computed 代理 v-model，让拖拽排序和字段修改统一向父组件同步。
 const localSteps = computed({
@@ -94,11 +102,13 @@ const localSteps = computed({
 const emitSteps = () => { emit('update:modelValue', props.modelValue); emit('change', props.modelValue) }
 const addStep = () => localSteps.value = [...localSteps.value, {
   id: `new-${Date.now()}-${Math.random()}`, action_type: 'click', element_id: '', element_page: '', locator_strategy: 'role', locator_value: '',
-  locator_name: '', input_value: '', wait_time: 1000, assert_type: 'textContains', assert_value: '', description: ''
+  locator_name: '', locator_options: {}, locator_options_json: '{}', input_value: '', wait_time: 1000, assert_type: 'textContains', assert_value: '', description: ''
 }]
 const removeStep = index => { localSteps.value = localSteps.value.filter((_, i) => i !== index) }
 const needsInput = action => ['fill', 'press', 'select', 'switchTab', 'navigate'].includes(action)
-const needsElement = step => !['wait', 'switchTab', 'screenshot', 'navigate'].includes(step.action_type) && !(step.action_type === 'assert' && step.assert_type === 'urlContains')
+const needsElement = step => !['wait', 'switchTab', 'screenshot', 'navigate', 'setVariable'].includes(step.action_type) && !(step.action_type === 'assert' && step.assert_type === 'urlContains')
+const hasElement = step => Boolean(step.element_id)
+const locatorOptionsText = options => JSON.stringify(options || {})
 const getElementsForStep = step => step.element_page ? props.elements.filter(item => item.page === step.element_page) : props.elements
 const elementOptionLabel = item => {
   const strategy = item.locator_strategy?.name || item.locator_strategy || ''
@@ -106,18 +116,44 @@ const elementOptionLabel = item => {
 }
 const onPageChange = step => {
   const selected = props.elements.find(item => item.id === step.element_id)
-  if (selected && selected.page !== step.element_page) step.element_id = ''
+  if (selected && selected.page !== step.element_page) {
+    step.element_id = ''
+    step.locator_strategy = 'role'
+    step.locator_value = ''
+    step.locator_name = ''
+    step.locator_options = {}
+    step.locator_options_json = '{}'
+  }
   emitSteps()
 }
 const onActionChange = step => {
-  if (!['fill', 'press', 'select', 'navigate', 'switchTab'].includes(step.action_type)) step.input_value = ''
+  if (!['fill', 'press', 'select', 'navigate', 'switchTab', 'setVariable'].includes(step.action_type)) step.input_value = ''
   if (!['wait', 'waitFor'].includes(step.action_type)) step.wait_time = 1000
   if (step.action_type !== 'assert') { step.assert_type = 'textContains'; step.assert_value = '' }
   if (!needsElement(step)) { step.element_id = ''; step.element_page = '' }
   emitSteps()
 }
 const onLocatorChange = step => {
-  if (!['role', 'label', 'placeholder'].includes(step.locator_strategy)) step.locator_name = ''
+  if (!['role', 'label', 'placeholder'].includes(step.locator_strategy)) {
+    step.locator_name = ''
+    if (step.locator_options?.name) {
+      const { name, ...options } = step.locator_options
+      step.locator_options = options
+      step.locator_options_json = locatorOptionsText(options)
+    }
+  }
+  if (!hasElement(step)) {
+    step.locator_options = {}
+    step.locator_options_json = '{}'
+  }
+  emitSteps()
+}
+const onLocatorNameInput = step => {
+  const options = { ...(step.locator_options || {}) }
+  if (step.locator_name) options.name = step.locator_name
+  else delete options.name
+  step.locator_options = options
+  step.locator_options_json = locatorOptionsText(options)
   emitSteps()
 }
 // 选择元素后回填其页面、定位器及可读描述，避免用户重复录入。
@@ -126,9 +162,17 @@ const onElementChange = step => {
   if (selected) {
     step.locator_value = selected.locator_value
     step.locator_strategy = selected.locator_strategy?.name?.toLowerCase() || step.locator_strategy
-    step.locator_name = selected.locator_options?.name || ''
+    step.locator_options = { ...(selected.locator_options || {}) }
+    step.locator_options_json = locatorOptionsText(step.locator_options)
+    step.locator_name = step.locator_options.name || ''
     step.element_page = selected.page || ''
     step.description ||= `${actions.find(item => item.value === step.action_type)?.label || ''}“${selected.name}”`
+  } else {
+    step.locator_strategy = 'role'
+    step.locator_value = ''
+    step.locator_name = ''
+    step.locator_options = {}
+    step.locator_options_json = '{}'
   }
   emitSteps()
 }
@@ -145,8 +189,13 @@ const onElementChange = step => {
 .step-header > .el-select:nth-of-type(2) { min-width: 150px; }
 .step-content { display: grid; gap: 8px; min-width: 0; }
 .step-field > .el-input { flex: 1; min-width: 0; }
-.locator-field > .el-select { flex: 0 0 150px; }
-.locator-field > .el-input { flex: 1 1 160px; }
+.variable-set-field > .el-input { flex: 1 1 0; min-width: 0; }
+.variable-set-field :deep(.el-input__inner) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.step-field :deep(.data-factory-button) { background-color: #409eff !important; border-color: #409eff !important; color: white !important; }
+.step-field :deep(.data-factory-button:hover) { background-color: #66b1ff !important; border-color: #66b1ff !important; }
+.step-field > .variable-helper-button { flex: 0 0 auto; background-color: #67c23a; border-color: #67c23a; color: white; }
+.step-field > .variable-helper-button:hover { background-color: #5daf34; border-color: #5daf34; }
+.locator-field > .el-select, .locator-field > .el-input { flex: 1 1 0; width: 0; min-width: 0; }
 .description-field { width: 100%; }
 .drag-handle { cursor: grab; color: var(--el-text-color-secondary); }
 .step-number { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: 0 0 24px; border-radius: 50%; background: #409eff; color: #fff; font-weight: 600; }
@@ -154,6 +203,6 @@ const onElementChange = step => {
   .step-header { flex-wrap: wrap; }
   .step-header > .el-select { flex: 1 1 140px; }
   .locator-field { flex-wrap: wrap; }
-  .locator-field > .el-select, .locator-field > .el-input { flex: 1 1 140px; }
+  .locator-field > .el-select, .locator-field > .el-input { flex: 1 1 0; width: 0; }
 }
 </style>

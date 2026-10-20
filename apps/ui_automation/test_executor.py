@@ -21,7 +21,8 @@ from .models import (
     TestSuite, TestExecution, TestCase, TestCaseStep,
     TestCaseExecution, Element
 )
-from .variable_resolver import resolve_variables
+from .variable_context import UiVariableContext, as_text
+from .playwright_engine import build_playwright_locator
 
 
 class TestExecutor:
@@ -36,6 +37,9 @@ class TestExecutor:
         self.execution = None
         self.test_cases = []
         self.results = []
+        # 共享字典仅存活于这次套件运行；单用例和其他执行器各自创建上下文。
+        self.run_variables = {}
+        self.variables = UiVariableContext()
 
     def create_execution_record(self):
         """创建测试执行记录"""
@@ -93,6 +97,9 @@ class TestExecutor:
         """执行测试套件"""
         print(f"[TestExecutor] 初始化执行器...")
         try:
+            # 每次套件执行从项目定义创建全新的运行副本，步骤覆盖仅存活于本次执行。
+            self.run_variables = {}
+            self.variables = UiVariableContext(self.test_suite.project.variables, run=self.run_variables)
             # 设置环境变量，允许在后台线程中使用同步 ORM
             # 这对于 Playwright 执行是必需的
             import os
@@ -134,6 +141,9 @@ class TestExecutor:
                     error_msg=f"执行失败: {str(e)}\n\n{traceback.format_exc()}"
                 )
         finally:
+            # 套件完成后清空运行副本；套件执行期间仍可跨用例共享变量。
+            self.variables.clear()
+            self.run_variables.clear()
             # 确保关闭数据库连接
             print(f"[TestExecutor] 关闭数据库连接...")
             connection.close()
@@ -215,6 +225,7 @@ class TestExecutor:
                 'id': test_case.id,
                 'name': test_case.name,
                 'project_id': self.test_suite.project.id,
+                # ORM 预加载后交给执行线程，避免浏览器执行阶段再访问数据库。
                 'steps': []
             }
 
@@ -559,6 +570,7 @@ class TestExecutor:
                 })
 
         result['end_time'] = datetime.now().isoformat()
+        self.variables.clear_temporary()
         return result
 
     def execute_test_case_playwright(self, page, case_data):
@@ -620,9 +632,22 @@ class TestExecutor:
             case_execution.save()
 
         result['end_time'] = datetime.now().isoformat()
+        self.variables.clear_temporary()
         return result
 
     def execute_step_playwright(self, step_data):
+        """使用 Playwright 执行单个步骤（同步版本）"""
+        result = self._execute_step_playwright(step_data)
+        if self.variables.strict:
+            # 将变量状态附在步骤结果上，供执行记录查看。
+            result['variables'] = self.variables.snapshot()
+        if result.get('error'):
+            result['error'] = self.variables.redact(result['error'])
+        if isinstance(result.get('result'), str):
+            result['result'] = self.variables.redact(result['result'])
+        return result
+
+    def _execute_step_playwright(self, step_data):
         """使用 Playwright 执行单个步骤（同步版本）
 
         Args:
@@ -641,17 +666,29 @@ class TestExecutor:
             'success': False,
             'error': None
         }
+        element_name = step_data.get('element', {}).get('name', '页面') if step_data.get('element') else '页面'
+        locator_strategy = step_data.get('element', {}).get('locator_strategy', 'css') if step_data.get('element') else 'css'
+        locator_value = step_data.get('element', {}).get('locator_value', '') if step_data.get('element') else ''
 
         try:
+            # 两个引擎都只在当前步骤开始时渲染，避免未执行步骤提前生成随机值。
+            step_data = self.variables.render_step(step_data)
+            variable_result = self.variables.apply_step(step_data)
+            if variable_result is not None:
+                step_result['success'], step_result['result'] = variable_result[0], variable_result[1]
+                return step_result
+            # DOM 输入和文本断言使用字符串；上下文中的变量仍保留原始类型。
+            step_data['input_value'] = as_text(step_data.get('input_value', ''))
+            step_data['assert_value'] = as_text(step_data.get('assert_value', ''))
             if step_data['action_type'] == 'navigate':
-                url = resolve_variables(step_data.get('input_value', ''))
+                url = step_data.get('input_value', '')
                 if not url:
                     step_result['error'] = '跳转URL失败: URL不能为空'
                 else:
                     self.current_page.goto(url, wait_until='networkidle', timeout=max(step_data.get('wait_time', 30000), 30000))
                     step_result['success'] = True
             elif step_data['action_type'] == 'assert' and step_data.get('assert_type') == 'urlContains':
-                expected_url = resolve_variables(step_data.get('assert_value', ''))
+                expected_url = step_data.get('assert_value', '')
                 actual_url = self.current_page.url
                 step_result['success'] = bool(expected_url and expected_url in actual_url)
                 if not step_result['success']:
@@ -663,39 +700,11 @@ class TestExecutor:
                 locator_strategy = element['locator_strategy'].lower()
                 element_name = element.get('name', '未知元素')
 
-                # 根据定位策略构造 Playwright 选择器
-                if locator_strategy in ['css', 'css selector']:
-                    selector = locator_value
-                elif locator_strategy == 'xpath':
-                    selector = f'xpath={locator_value}'
-                elif locator_strategy == 'id':
-                    selector = f'#{locator_value}'
-                elif locator_strategy == 'name':
-                    selector = f'[name="{locator_value}"]'
-                elif locator_strategy == 'text':
-                    selector = f'text={locator_value}'
-                else:
-                    selector = locator_value
-                # 优先使用元素库保存的 Playwright 附加选项，保持录制定位器语义。
-                locator_options = element.get('locator_options') or {}
-                playwright_locator_methods = {
-                    'role': 'get_by_role', 'label': 'get_by_label',
-                    'placeholder': 'get_by_placeholder', 'title': 'get_by_title',
-                    'test-id': 'get_by_test_id', 'alt-text': 'get_by_alt_text',
-                }
-                method = playwright_locator_methods.get(locator_strategy)
-                if method:
-                    locator_factory = getattr(self.current_page, method)
-                    if locator_strategy == 'role':
-                        target_locator = locator_factory(locator_value, **locator_options)
-                    else:
-                        target_locator = locator_factory(locator_value, **locator_options)
-                    if locator_options.get('first'):
-                        target_locator = target_locator.first
-                    elif locator_options.get('nth') is not None:
-                        target_locator = target_locator.nth(locator_options['nth'])
-                else:
-                    target_locator = self.current_page.locator(selector)
+                # 同步套件和异步单用例使用相同的定位选项及 first/nth 语义。
+                target_locator = build_playwright_locator(
+                    self.current_page, locator_strategy, locator_value,
+                    element.get('locator_options'),
+                )
 
                 # 根据操作类型执行动作
                 if step_data['action_type'] == 'click':
@@ -707,7 +716,7 @@ class TestExecutor:
                     )
 
                     # 对于原生HTML select的option，使用select_option方法
-                    if is_native_select_option:
+                    if is_native_select_option and not element.get('locator_options'):
                         print(f"[Playwright-调试] 检测到原生HTML select元素，使用select_option方法...")
 
                         # 提取option的value值
@@ -780,7 +789,7 @@ class TestExecutor:
                                 '//li' not in locator_value
                         )
 
-                        if is_select_trigger:
+                        if is_select_trigger and not element.get('locator_options'):
                             # el-select 容器：需要点击内部的真正触发器
                             import time as sync_time
 
@@ -838,7 +847,7 @@ class TestExecutor:
                             else:
                                 step_result['error'] = f"✗ 下拉框触发器点击失败: {js_result.get('error')}"
 
-                        elif is_dropdown_option:
+                        elif is_dropdown_option and not element.get('locator_options'):
                             # 下拉框选项：使用 Playwright 原生方法（更可靠）
                             # 之前使用 JS click() 可能无法触发 Element Plus 的事件监听
                             self.current_page.wait_for_timeout(800)  # 等待下拉框展开
@@ -923,24 +932,24 @@ class TestExecutor:
 
                                 # 使用更长的超时时间（至少10秒）
                                 extended_timeout = max(step_data['wait_time'], 10000)
-                                self.current_page.click(selector, timeout=extended_timeout)
+                                target_locator.click(timeout=extended_timeout)
                                 print(f"  ✓ 点击成功（超时: {extended_timeout}ms）")
                             else:
-                                self.current_page.click(selector, timeout=step_data['wait_time'])
+                                target_locator.click(timeout=step_data['wait_time'])
                             step_result['success'] = True
 
                 elif step_data['action_type'] == 'fill':
                     # 解析输入值中的变量表达式
-                    resolved_value = resolve_variables(step_data['input_value'])
+                    resolved_value = step_data['input_value']
 
                     # 如果刚切换了标签页，增加超时时间
                     if step_data.get('_just_switched_tab'):
                         # 确保页面保持在前台
                         self.current_page.bring_to_front()
                         extended_timeout = max(step_data['wait_time'], 10000)
-                        self.current_page.fill(selector, resolved_value, timeout=extended_timeout)
+                        target_locator.fill(resolved_value, timeout=extended_timeout)
                     else:
-                        self.current_page.fill(selector, resolved_value, timeout=step_data['wait_time'])
+                        target_locator.fill(resolved_value, timeout=step_data['wait_time'])
 
                     step_result['success'] = True
                     # 记录解析后的值（用于调试）
@@ -949,11 +958,11 @@ class TestExecutor:
                         print(f"  ✓ 变量解析: {step_data['input_value']} -> {resolved_value}")
 
                 elif step_data['action_type'] == 'press':
-                    target_locator.press(resolve_variables(step_data['input_value']), timeout=step_data['wait_time'])
+                    target_locator.press(step_data['input_value'], timeout=step_data['wait_time'])
                     step_result['success'] = True
 
                 elif step_data['action_type'] == 'select':
-                    target_locator.select_option(value=resolve_variables(step_data['input_value']), timeout=step_data['wait_time'])
+                    target_locator.select_option(value=step_data['input_value'], timeout=step_data['wait_time'])
                     step_result['success'] = True
 
                 elif step_data['action_type'] in {'check', 'uncheck'}:
@@ -964,6 +973,10 @@ class TestExecutor:
                 elif step_data['action_type'] == 'getText':
                     text = target_locator.text_content(timeout=step_data['wait_time'])
                     step_result['result'] = text
+                    save_name = str(step_data.get('assert_value') or '').strip()
+                    if save_name:
+                        self.variables.set_temporary(save_name, text)
+                        step_result['saved_variable'] = save_name
                     step_result['success'] = True
 
                 elif step_data['action_type'] == 'waitFor':
@@ -986,7 +999,7 @@ class TestExecutor:
                     step_result['success'] = True
 
                 elif step_data['action_type'] == 'hover':
-                    self.current_page.hover(selector, timeout=step_data['wait_time'])
+                    target_locator.hover(timeout=step_data['wait_time'])
                     step_result['success'] = True
 
                 elif step_data['action_type'] == 'scroll':
@@ -1001,7 +1014,7 @@ class TestExecutor:
 
                 elif step_data['action_type'] == 'assert':
                     # 解析断言值中的变量
-                    resolved_assert_value = resolve_variables(step_data['assert_value'])
+                    resolved_assert_value = step_data['assert_value']
                     if resolved_assert_value != step_data['assert_value']:
                         print(f"  ✓ 断言变量解析: {step_data['assert_value']} -> {resolved_assert_value}")
 
@@ -1818,6 +1831,7 @@ class TestExecutor:
         }
 
         try:
+            # Selenium 与 Playwright 共用严格解析规则，渲染结果只用于当前步骤。
             # 遍历预先准备好的步骤数据
             for step_data in case_data['steps']:
                 step_result = self.execute_step_selenium(driver, step_data)
@@ -1873,6 +1887,7 @@ class TestExecutor:
                 print(f"捕获异常截图失败: {str(screenshot_error)}")
 
         result['end_time'] = datetime.now().isoformat()
+        self.variables.clear_temporary()
         return result
 
     def execute_test_case_selenium(self, driver, case_data):
@@ -1901,6 +1916,7 @@ class TestExecutor:
         )
 
         try:
+            # 历史入口也使用同一上下文，避免绕过变量解析和脱敏逻辑。
             # 遍历预先准备好的步骤数据
             for step_data in case_data['steps']:
                 step_result = self.execute_step_selenium(driver, step_data)
@@ -1931,9 +1947,21 @@ class TestExecutor:
             case_execution.save()
 
         result['end_time'] = datetime.now().isoformat()
+        self.variables.clear_temporary()
         return result
 
     def execute_step_selenium(self, driver, step_data):
+        """使用 Selenium 执行单个步骤"""
+        result = self._execute_step_selenium(driver, step_data)
+        if self.variables.strict:
+            # 保存脱敏后的项目变量快照，不把运行时凭据写入执行日志。
+            result['variables'] = self.variables.snapshot()
+        for key in ('error', 'result', 'resolved_value'):
+            if isinstance(result.get(key), str):
+                result[key] = self.variables.redact(result[key])
+        return result
+
+    def _execute_step_selenium(self, driver, step_data):
         """使用 Selenium 执行单个步骤
 
         Args:
@@ -1951,16 +1979,31 @@ class TestExecutor:
             'error': None
         }
 
+        element_name = step_data.get('element', {}).get('name', '页面') if step_data.get('element') else '页面'
+        locator_strategy = step_data.get('element', {}).get('locator_strategy', 'css') if step_data.get('element') else 'css'
+        locator_value = step_data.get('element', {}).get('locator_value', '') if step_data.get('element') else ''
+
         try:
+            # 解析输入、断言和定位器；更新副本，不改写数据库中的步骤定义。
+            step_data = self.variables.render_step(step_data)
+            variable_result = self.variables.apply_step(step_data)
+            if variable_result is not None:
+                step_result['success'], step_result['result'] = variable_result[0], variable_result[1]
+                return step_result
+            for key in ('input_value', 'assert_value'):
+                if key in step_data:
+                    step_data[key] = as_text(step_data[key])
+            if step_data.get('element'):
+                step_data['element']['locator_value'] = as_text(step_data['element']['locator_value'])
             if step_data['action_type'] == 'navigate':
-                url = resolve_variables(step_data.get('input_value', ''))
+                url = step_data.get('input_value', '')
                 if not url:
                     step_result['error'] = '跳转URL失败: URL不能为空'
                 else:
                     driver.get(url)
                     step_result['success'] = True
             elif step_data['action_type'] == 'assert' and step_data.get('assert_type') == 'urlContains':
-                expected_url = resolve_variables(step_data.get('assert_value', ''))
+                expected_url = step_data.get('assert_value', '')
                 actual_url = driver.current_url
                 step_result['success'] = bool(expected_url and expected_url in actual_url)
                 if not step_result['success']:
@@ -2185,7 +2228,7 @@ class TestExecutor:
                     element_obj = wait.until(EC.presence_of_element_located((by, locator_value)))
                     
                     # 解析输入值中的变量表达式
-                    resolved_value = resolve_variables(step_data['input_value'])
+                    resolved_value = step_data['input_value']
 
                     for attempt in range(max_retries):
                         try:
@@ -2215,10 +2258,10 @@ class TestExecutor:
                 elif step_data['action_type'] in {'press', 'select', 'check', 'uncheck'}:
                     element_obj = wait.until(EC.presence_of_element_located((by, locator_value)))
                     if step_data['action_type'] == 'press':
-                        element_obj.send_keys(resolve_variables(step_data['input_value']))
+                        element_obj.send_keys(step_data['input_value'])
                     elif step_data['action_type'] == 'select':
                         from selenium.webdriver.support.ui import Select
-                        Select(element_obj).select_by_value(resolve_variables(step_data['input_value']))
+                        Select(element_obj).select_by_value(step_data['input_value'])
                     else:
                         should_be_selected = step_data['action_type'] == 'check'
                         if bool(element_obj.is_selected()) != should_be_selected:
@@ -2233,6 +2276,10 @@ class TestExecutor:
                         try:
                             text = element_obj.text
                             step_result['result'] = text
+                            save_name = str(step_data.get('assert_value') or '').strip()
+                            if save_name:
+                                self.variables.set_temporary(save_name, text)
+                                step_result['saved_variable'] = save_name
                             step_result['success'] = True
                             break
                         except StaleElementReferenceException:
@@ -2282,7 +2329,7 @@ class TestExecutor:
                     element_obj = wait.until(EC.presence_of_element_located((by, locator_value)))
                     
                     # 解析断言值中的变量
-                    resolved_assert_value = resolve_variables(step_data['assert_value'])
+                    resolved_assert_value = step_data['assert_value']
                     if resolved_assert_value != step_data['assert_value']:
                         print(f"  ✓ 断言变量解析: {step_data['assert_value']} -> {resolved_assert_value}")
 
