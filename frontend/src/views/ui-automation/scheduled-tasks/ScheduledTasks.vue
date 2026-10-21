@@ -260,6 +260,13 @@
           <el-checkbox v-model="taskForm.headless">{{ $t('uiAutomation.scheduledTask.headlessMode') }}</el-checkbox>
         </el-form-item>
 
+        <!-- 定时任务只在 Playwright 执行时允许选择初始登录态。 -->
+        <el-form-item label="登录态">
+          <el-select v-model="taskForm.storage_state" clearable placeholder="无登录态" :disabled="taskForm.engine !== 'playwright'" style="width: 260px">
+            <el-option v-for="state in storageStates" :key="state.id" :label="state.name" :value="state.id" />
+          </el-select>
+        </el-form-item>
+
         <el-form-item :label="$t('uiAutomation.scheduledTask.notificationSettings')">
           <el-checkbox v-model="taskForm.notify_on_success">{{ $t('uiAutomation.scheduledTask.notifyOnSuccess') }}</el-checkbox>
           <el-checkbox v-model="taskForm.notify_on_failure">{{ $t('uiAutomation.scheduledTask.notifyOnFailure') }}</el-checkbox>
@@ -316,7 +323,8 @@ import {
   getUiProjects,
   getTestSuites,
   getTestCases,
-  getUiUsers
+  getUiUsers,
+  getStorageStates
 } from '@/api/ui_automation.js'
 
 const { t, locale } = useI18n()
@@ -326,6 +334,7 @@ const tasks = ref([])
 const projects = ref([])
 const testSuites = ref([])
 const testCases = ref([])
+const storageStates = ref([])
 const users = ref([])
 const loading = ref(false)
 const submitting = ref(false)
@@ -358,6 +367,7 @@ const taskForm = reactive({
   execute_at: '',
   test_suite: '',
   test_cases: [],
+  storage_state: null,
   engine: 'playwright',
   browser: 'chrome',
   headless: false,
@@ -451,7 +461,14 @@ const loadUsers = async () => {
 
 // 项目变化时加载对应的套件和用例
 const onProjectChange = async (projectId) => {
-  if (!projectId) return
+  if (!projectId) {
+    testSuites.value = []
+    testCases.value = []
+    storageStates.value = []
+    taskForm.storage_state = null
+    return
+  }
+  taskForm.storage_state = null
 
   try {
     // 加载测试套件
@@ -461,6 +478,9 @@ const onProjectChange = async (projectId) => {
     // 加载测试用例
     const casesResponse = await getTestCases({ project: projectId })
     testCases.value = casesResponse.data.results
+    // 切换项目时同步刷新登录态列表，并清空上一个项目的选择。
+    const statesResponse = await getStorageStates({ project: projectId, page_size: 200 })
+    storageStates.value = statesResponse.data.results || statesResponse.data
   } catch (error) {
     console.error('Load project data failed:', error)
   }
@@ -492,6 +512,7 @@ const resetTaskForm = () => {
     execute_at: '',
     test_suite: '',
     test_cases: [],
+    storage_state: null,
     engine: 'playwright',
     browser: 'chrome',
     headless: false,
@@ -525,6 +546,7 @@ const submitTaskForm = async () => {
       engine: taskForm.engine,
       browser: taskForm.browser,
       headless: taskForm.headless,
+      storage_state: taskForm.engine === 'playwright' ? taskForm.storage_state : null,
       notify_on_success: taskForm.notify_on_success,
       notify_on_failure: taskForm.notify_on_failure
     }
@@ -650,6 +672,7 @@ const editTask = async (task) => {
     execute_at: task.execute_at,
     test_suite: task.test_suite || '',
     test_cases: task.test_cases || [],
+    storage_state: task.storage_state || null,
     engine: task.engine || 'playwright',
     browser: task.browser || 'chrome',
     headless: task.headless || false,

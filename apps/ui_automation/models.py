@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 import json
+import uuid
 from apps.projects.models import Project
 from apps.projects.managers import ActiveProjectManager
 from .playwright_engine import playwright_locator_expression
@@ -47,6 +48,32 @@ class UiProject(models.Model):
         verbose_name = 'UI自动化项目'
         verbose_name_plural = 'UI自动化项目'
         ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name
+
+
+# 登录态文件按项目隔离目录保存，文件名使用随机值避免同名覆盖。
+def storage_state_upload_to(instance, filename):
+    return f'ui-automation/storage-states/project_{instance.project_id}/{uuid.uuid4().hex}.json'
+
+
+class StorageState(models.Model):
+    """项目级 Playwright storage_state 资源。"""
+    project = models.ForeignKey(UiProject, on_delete=models.CASCADE, related_name='storage_states', verbose_name='所属项目')
+    name = models.CharField(max_length=200, verbose_name='登录态名称')
+    source_url = models.URLField(blank=True, verbose_name='来源页面')
+    browser = models.CharField(max_length=20, default='chromium', verbose_name='浏览器')
+    file = models.FileField(upload_to=storage_state_upload_to, verbose_name='登录态文件')
+    file_size = models.PositiveIntegerField(default=0, verbose_name='文件大小')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_storage_states')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'ui_storage_states'
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['project', '-created_at'])]
 
     def __str__(self):
         return self.name
@@ -683,6 +710,7 @@ class TestCaseStep(models.Model):
         ('switchTab', '切换标签页'),
         ('navigate', '跳转URL'),
         ('setVariable', '设置临时变量'),
+        ('storageState', '登录态'),
     ]
 
     ASSERT_TYPE_CHOICES = [
@@ -699,6 +727,7 @@ class TestCaseStep(models.Model):
     action_type = models.CharField(max_length=20, choices=ACTION_TYPE_CHOICES, verbose_name='操作类型')
     element = models.ForeignKey(Element, on_delete=models.CASCADE, null=True, blank=True, verbose_name='目标元素')
     input_value = models.TextField(blank=True, verbose_name='输入值')
+    action_params = models.JSONField(default=dict, blank=True, verbose_name='动作参数')
     wait_time = models.IntegerField(default=1000, verbose_name='等待时间(毫秒)')
     assert_type = models.CharField(max_length=20, choices=ASSERT_TYPE_CHOICES, blank=True, verbose_name='断言类型')
     assert_value = models.TextField(blank=True, verbose_name='断言期望值')
@@ -849,6 +878,11 @@ class UiScheduledTask(models.Model):
                                    verbose_name='测试套件')
     test_cases = models.JSONField(default=list, blank=True, verbose_name='测试用例列表',
                                  help_text='测试用例ID列表，用于TEST_CASE类型任务')
+    # 定时任务可选一个初始登录态，执行时复制到独立 Playwright 上下文。
+    storage_state = models.ForeignKey(
+        StorageState, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='scheduled_tasks', verbose_name='初始登录态'
+    )
 
     # 执行配置
     engine = models.CharField(max_length=20, default='playwright', verbose_name='执行引擎',

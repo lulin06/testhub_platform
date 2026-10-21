@@ -4,6 +4,7 @@ from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
 from .views import (
     UiProjectViewSet,
+    StorageStateViewSet,
     LocatorStrategyViewSet,
     ElementGroupViewSet,
     ElementViewSet,
@@ -28,6 +29,7 @@ from .views_config import EnvironmentConfigViewSet, AIIntelligentModeConfigViewS
 router = DefaultRouter()
 router.register(r'dashboard', UiDashboardViewSet, basename='dashboard')
 router.register(r'projects', UiProjectViewSet)
+router.register(r'storage-states', StorageStateViewSet)
 router.register(r'locator-strategies', LocatorStrategyViewSet)
 router.register(r'element-groups', ElementGroupViewSet)
 router.register(r'elements', ElementViewSet)

@@ -28,12 +28,14 @@ from .playwright_engine import build_playwright_locator
 class TestExecutor:
     """测试执行器基类"""
 
-    def __init__(self, test_suite, engine='playwright', browser='chrome', headless=False, executed_by=None):
+    def __init__(self, test_suite, engine='playwright', browser='chrome', headless=False, executed_by=None,
+                 storage_state_id=None):
         self.test_suite = test_suite
         self.engine = engine
         self.browser = browser
         self.headless = headless
         self.executed_by = executed_by
+        self.storage_state_id = storage_state_id
         self.execution = None
         self.test_cases = []
         self.results = []
@@ -53,6 +55,10 @@ class TestExecutor:
             executed_by=self.executed_by,
             started_at=timezone.now()
         )
+        self.execution.run_config = {
+            'storage_state_id': self.storage_state_id,
+        }
+        self.execution.save(update_fields=['run_config'])
         return self.execution
 
     def update_execution_result(self, status, passed=0, failed=0, skipped=0, duration=0, error_msg=''):
@@ -241,6 +247,7 @@ class TestExecutor:
                     'wait_time': step.wait_time,
                     'assert_type': step.assert_type,
                     'assert_value': step.assert_value,
+                    'action_params': step.action_params or {},
                     'element': None
                 }
 
@@ -313,10 +320,21 @@ class TestExecutor:
 
                     print(f"✓ 浏览器已启动")
 
-                    # 配置上下文（User Agent 和 Viewport）
+                    # 配置上下文，并在套件执行开始时加载用户选择的初始登录态。
+                    self.browser_instance = browser
+                    self._active_project_id = case_data['project_id']
+                    initial_state = None
+                    if self.storage_state_id:
+                        from .models import StorageState
+                        initial_state = StorageState.objects.filter(
+                            pk=self.storage_state_id, project_id=case_data['project_id']
+                        ).first()
+                        if not initial_state:
+                            raise ValueError('选择的登录态不存在或不属于当前项目')
                     self.context = browser.new_context(
                         viewport={'width': 1920, 'height': 1080},
-                        user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+                        user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                        **({'storage_state': initial_state.file.path} if initial_state else {})
                     )
                     self.current_page = self.context.new_page()
 
@@ -680,7 +698,11 @@ class TestExecutor:
             # DOM 输入和文本断言使用字符串；上下文中的变量仍保留原始类型。
             step_data['input_value'] = as_text(step_data.get('input_value', ''))
             step_data['assert_value'] = as_text(step_data.get('assert_value', ''))
-            if step_data['action_type'] == 'navigate':
+            # 登录态动作会改变执行上下文，必须优先于普通页面动作处理。
+            if step_data['action_type'] == 'storageState':
+                self._execute_storage_state_action(step_data.get('action_params') or {})
+                step_result['success'] = True
+            elif step_data['action_type'] == 'navigate':
                 url = step_data.get('input_value', '')
                 if not url:
                     step_result['error'] = '跳转URL失败: URL不能为空'
@@ -1348,6 +1370,65 @@ class TestExecutor:
 
         return step_result
 
+    def _execute_storage_state_action(self, params):
+        """在同步 Playwright 上下文中执行保存、切换或清除登录态。"""
+        import json
+        import tempfile
+        from pathlib import Path
+        from django.core.files.base import ContentFile
+        from .models import StorageState
+
+        operation = params.get('operation')
+        project_id = getattr(self, '_active_project_id', None)
+        # 保存当前上下文的 Cookie 和 localStorage，并写回项目登录态资源。
+        if operation == 'save':
+            name = str(params.get('name') or '').strip()
+            mode = params.get('mode', 'save_as')
+            with tempfile.NamedTemporaryFile(suffix='.json') as state_file:
+                self.context.storage_state(path=state_file.name)
+                raw = Path(state_file.name).read_bytes()
+            if mode == 'overwrite':
+                target = StorageState.objects.filter(pk=params.get('storage_state_id'), project_id=project_id).first()
+                if not target:
+                    raise ValueError('要覆盖的登录态不存在或不属于当前项目')
+            else:
+                target = StorageState(project_id=project_id, name=name, source_url=self.current_page.url, browser='chromium', created_by=self.executed_by)
+            if not name and mode != 'overwrite':
+                raise ValueError('保存登录态需要填写名称')
+            if name:
+                target.name = name
+            target.source_url = self.current_page.url
+            target.file.save(f'{target.name}.json', ContentFile(raw), save=False)
+            target.file_size = len(raw)
+            target.save()
+            return target
+        # 切换和清除都重建上下文，保证认证数据按步骤隔离。
+        if operation in {'switch', 'clear'}:
+            url = self.current_page.url
+            old_context = self.context
+            browser = self.browser_instance
+            state_path = None
+            if operation == 'switch':
+                target_id = params.get('storage_state_id')
+                target = StorageState.objects.filter(pk=target_id, project_id=project_id).first()
+                if not target:
+                    raise ValueError('目标登录态不存在或不属于当前项目')
+                state_path = target.file.path
+            old_context.close()
+            self.context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                storage_state=state_path,
+            ) if state_path else browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            )
+            self.current_page = self.context.new_page()
+            if url and url != 'about:blank':
+                self.current_page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            return
+        raise ValueError('未知的登录态操作')
+
     def run_with_selenium(self):
         """使用 Selenium 执行测试"""
         start_time = time.time()
@@ -1377,6 +1458,7 @@ class TestExecutor:
                     'wait_time': step.wait_time,
                     'assert_type': step.assert_type,
                     'assert_value': step.assert_value,
+                    'action_params': step.action_params or {},
                     'element': None
                 }
 

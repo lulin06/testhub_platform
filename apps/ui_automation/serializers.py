@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 from .models import (
-    UiProject, LocatorStrategy, Element, TestScript, TestSuite,
+    UiProject, StorageState, LocatorStrategy, Element, TestScript, TestSuite,
     TestSuiteScript, TestSuiteTestCase, TestExecution, TestEnvironment, Screenshot,
     ElementGroup, PageObject, PageObjectElement, ScriptStep, ScriptElementUsage,
     TestCase, TestCaseStep, TestCaseExecution, OperationRecord,
@@ -11,6 +11,7 @@ from .models import (
 from django.contrib.auth import get_user_model
 from urllib.parse import urlparse
 import re
+import json
 
 User = get_user_model()
 
@@ -23,6 +24,7 @@ def validate_test_case_step_data(
     assert_value='',
     element=None,
     project_id=None,
+    action_params=None,
 ):
     """校验 UI 测试步骤的动作、目标元素和参数之间的约束。"""
     element_actions = {
@@ -53,6 +55,20 @@ def validate_test_case_step_data(
 
     if element and project_id is not None and str(element.project_id) != str(project_id):
         raise serializers.ValidationError('目标元素必须属于当前项目')
+
+    # 登录态步骤使用独立参数校验，保存和切换必须引用合法的登录态资源。
+    if action_type == 'storageState':
+        params = action_params or {}
+        operation = params.get('operation')
+        if operation not in {'save', 'switch', 'clear'}:
+            raise serializers.ValidationError('登录态动作必须选择保存、切换或清除')
+        if operation == 'save':
+            if not str(params.get('name') or '').strip():
+                raise serializers.ValidationError('保存登录态需要填写名称')
+            if params.get('mode', 'save_as') not in {'overwrite', 'save_as'}:
+                raise serializers.ValidationError('登录态保存方式无效')
+        elif operation == 'switch' and not params.get('storage_state_id'):
+            raise serializers.ValidationError('切换登录态需要选择目标登录态')
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -95,6 +111,46 @@ class UiProjectUpdateSerializer(serializers.ModelSerializer):
             return validate_variables(value)
         except VariableError as exc:
             raise serializers.ValidationError(str(exc)) from exc
+
+
+class StorageStateSerializer(serializers.ModelSerializer):
+    """校验并序列化项目级 storage_state 文件。"""
+    project_id = serializers.IntegerField(write_only=True, required=False)
+    download_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StorageState
+        fields = ('id', 'project', 'project_id', 'name', 'source_url', 'browser', 'file', 'file_size',
+                  'download_url', 'created_by', 'created_at', 'updated_at')
+        read_only_fields = ('project', 'file_size', 'download_url', 'created_by', 'created_at', 'updated_at')
+
+    def get_download_url(self, obj):
+        request = self.context.get('request')
+        if not obj.file:
+            return ''
+        url = obj.file.url
+        return request.build_absolute_uri(url) if request else url
+
+    def validate_name(self, value):
+        value = str(value or '').strip()
+        if not value:
+            raise serializers.ValidationError('请输入登录态名称')
+        return value[:200]
+
+    def validate(self, attrs):
+        uploaded = attrs.get('file')
+        if uploaded:
+            if uploaded.size > 2 * 1024 * 1024:
+                raise serializers.ValidationError({'file': '登录态文件不能超过2MB'})
+            try:
+                payload = json.loads(uploaded.read().decode('utf-8'))
+                uploaded.seek(0)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise serializers.ValidationError({'file': '登录态文件必须是有效的UTF-8 JSON'}) from exc
+            if not isinstance(payload, dict) or not isinstance(payload.get('cookies', []), list) or not isinstance(payload.get('origins', []), list):
+                raise serializers.ValidationError({'file': '登录态 JSON 必须包含 cookies 和 origins 数组'})
+            attrs['file_size'] = uploaded.size
+        return attrs
 
 
 class LocatorStrategySerializer(serializers.ModelSerializer):
@@ -608,7 +664,7 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'step_number', 'action_type', 'element', 'element_name', 'element_page', 'element_locator',
             'element_locator_strategy', 'element_locator_options',
-            'input_value', 'wait_time', 'assert_type', 'assert_value', 'description', 'created_at'
+            'input_value', 'action_params', 'wait_time', 'assert_type', 'assert_value', 'description', 'created_at'
         ]
 
     def get_element_locator_strategy(self, obj):
@@ -628,6 +684,9 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
         element = attrs.get('element', getattr(self.instance, 'element', None))
         project_id = getattr(getattr(self.instance, 'test_case', None), 'project_id', None)
 
+        action_params = attrs.get('action_params', getattr(self.instance, 'action_params', {})) or {}
+        if action_type == 'storageState' and not action_params:
+            raise serializers.ValidationError({'action_params': '登录态动作参数不能为空'})
         validate_test_case_step_data(
             action_type=action_type,
             assert_type=assert_type,
@@ -635,6 +694,7 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
             assert_value=attrs.get('assert_value', getattr(self.instance, 'assert_value', '')),
             element=element,
             project_id=project_id,
+            action_params=action_params,
         )
         return attrs
 
@@ -745,6 +805,7 @@ class UiScheduledTaskSerializer(serializers.ModelSerializer):
             'trigger_type', 'trigger_type_display', 'cron_expression',
             'interval_seconds', 'execute_at', 'project', 'project_name',
             'test_suite', 'test_suite_name', 'test_cases',
+            'storage_state',
             'engine', 'browser', 'headless',
             'notify_on_success', 'notify_on_failure', 'notification_type', 'notification_type_display', 'notify_emails',
             'status', 'status_display',
@@ -792,6 +853,13 @@ class UiScheduledTaskSerializer(serializers.ModelSerializer):
             test_cases = attrs.get('test_cases', [])
             if not test_cases or len(test_cases) == 0:
                 raise serializers.ValidationError("至少选择一个测试用例")
+
+        project = attrs.get('project', getattr(self.instance, 'project', None))
+        storage_state = attrs.get('storage_state', getattr(self.instance, 'storage_state', None))
+        if storage_state and (not project or storage_state.project_id != project.id):
+            raise serializers.ValidationError({'storage_state': '登录态必须属于任务关联项目'})
+        if storage_state and attrs.get('engine', getattr(self.instance, 'engine', 'playwright')) != 'playwright':
+            raise serializers.ValidationError({'storage_state': '只有 Playwright 任务支持登录态'})
 
         return attrs
 

@@ -36,6 +36,24 @@
             <el-input v-model="element.input_value" size="small" placeholder="变量名" @input="emitSteps" />
             <el-input v-model="element.assert_value" size="small" placeholder="变量值" @input="emitSteps" />
           </div>
+          <!-- 登录态步骤不绑定页面元素，只编辑保存、切换、清除及其参数。 -->
+          <div v-else-if="element.action_type === 'storageState'" class="storage-state-fields">
+            <el-select v-model="element.action_params.operation" size="small" placeholder="操作" @change="emitSteps">
+              <el-option label="保存" value="save" /><el-option label="切换" value="switch" /><el-option label="清除" value="clear" />
+            </el-select>
+            <template v-if="element.action_params.operation === 'save'">
+              <el-input v-model="element.action_params.name" size="small" placeholder="登录态名称" @input="emitSteps" />
+              <el-radio-group v-model="element.action_params.mode" size="small" @change="emitSteps">
+                <el-radio-button value="overwrite">覆盖</el-radio-button><el-radio-button value="save_as">另存为</el-radio-button>
+              </el-radio-group>
+              <el-select v-if="element.action_params.mode === 'overwrite'" v-model="element.action_params.storage_state_id" size="small" placeholder="选择覆盖项" @change="emitSteps">
+                <el-option v-for="state in storageStates" :key="state.id" :label="state.name" :value="state.id" />
+              </el-select>
+            </template>
+            <el-select v-else-if="element.action_params.operation === 'switch'" v-model="element.action_params.storage_state_id" size="small" placeholder="选择登录态" @change="emitSteps">
+              <el-option v-for="state in storageStates" :key="state.id" :label="state.name" :value="state.id" />
+            </el-select>
+          </div>
           <div v-else-if="element.action_type === 'getText'" class="step-field">
             <el-input v-model="element.assert_value" size="small" placeholder="保存到临时变量（可选）" @input="emitSteps" />
           </div>
@@ -79,6 +97,7 @@ const props = defineProps({
   modelValue: { type: Array, default: () => [] },
   elements: { type: Array, default: () => [] },
   pages: { type: Array, default: () => [] },
+  storageStates: { type: Array, default: () => [] },
   title: { type: String, default: '结构化步骤' },
   helperActions: { type: Boolean, default: false },
   showToolbar: { type: Boolean, default: true }
@@ -92,7 +111,7 @@ const actions = [
   { value: 'hover', label: '悬停' }, { value: 'getText', label: '获取文本' }, { value: 'waitFor', label: '等待元素' },
   { value: 'scroll', label: '滚动' }, { value: 'screenshot', label: '截图' }, { value: 'assert', label: '断言' },
   { value: 'wait', label: '等待' }, { value: 'switchTab', label: '切换标签页' }, { value: 'navigate', label: '跳转URL' },
-  { value: 'setVariable', label: '设置临时变量' }
+  { value: 'setVariable', label: '设置临时变量' }, { value: 'storageState', label: '登录态' }
 ]
 // 使用 computed 代理 v-model，让拖拽排序和字段修改统一向父组件同步。
 const localSteps = computed({
@@ -102,11 +121,11 @@ const localSteps = computed({
 const emitSteps = () => { emit('update:modelValue', props.modelValue); emit('change', props.modelValue) }
 const addStep = () => localSteps.value = [...localSteps.value, {
   id: `new-${Date.now()}-${Math.random()}`, action_type: 'click', element_id: '', element_page: '', locator_strategy: 'role', locator_value: '',
-  locator_name: '', locator_options: {}, locator_options_json: '{}', input_value: '', wait_time: 1000, assert_type: 'textContains', assert_value: '', description: ''
+  locator_name: '', locator_options: {}, locator_options_json: '{}', input_value: '', action_params: {}, wait_time: 1000, assert_type: 'textContains', assert_value: '', description: ''
 }]
 const removeStep = index => { localSteps.value = localSteps.value.filter((_, i) => i !== index) }
 const needsInput = action => ['fill', 'press', 'select', 'switchTab', 'navigate'].includes(action)
-const needsElement = step => !['wait', 'switchTab', 'screenshot', 'navigate', 'setVariable'].includes(step.action_type) && !(step.action_type === 'assert' && step.assert_type === 'urlContains')
+const needsElement = step => !['wait', 'switchTab', 'screenshot', 'navigate', 'setVariable', 'storageState'].includes(step.action_type) && !(step.action_type === 'assert' && step.assert_type === 'urlContains')
 const hasElement = step => Boolean(step.element_id)
 const locatorOptionsText = options => JSON.stringify(options || {})
 const getElementsForStep = step => step.element_page ? props.elements.filter(item => item.page === step.element_page) : props.elements
@@ -131,6 +150,7 @@ const onActionChange = step => {
   if (!['wait', 'waitFor'].includes(step.action_type)) step.wait_time = 1000
   if (step.action_type !== 'assert') { step.assert_type = 'textContains'; step.assert_value = '' }
   if (!needsElement(step)) { step.element_id = ''; step.element_page = '' }
+  if (step.action_type === 'storageState') step.action_params = { operation: 'save', mode: 'save_as', name: '', storage_state_id: null }
   emitSteps()
 }
 const onLocatorChange = step => {
@@ -188,6 +208,7 @@ const onElementChange = step => {
 .step-header > .el-select { min-width: 105px; }
 .step-header > .el-select:nth-of-type(2) { min-width: 150px; }
 .step-content { display: grid; gap: 8px; min-width: 0; }
+.storage-state-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .step-field > .el-input { flex: 1; min-width: 0; }
 .variable-set-field > .el-input { flex: 1 1 0; min-width: 0; }
 .variable-set-field :deep(.el-input__inner) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

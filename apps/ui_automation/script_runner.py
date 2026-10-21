@@ -3,6 +3,7 @@
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,7 @@ from playwright.sync_api import Error as _TestHubPlaywrightError
 _testhub_original_launch = _TestHubBrowserType.launch
 _testhub_original_click = _TestHubLocator.click
 _testhub_original_browser_new_page = _TestHubBrowser.new_page
+_testhub_original_browser_new_context = _TestHubBrowser.new_context
 _testhub_original_context_new_page = _TestHubBrowserContext.new_page
 _testhub_original_goto = _TestHubPage.goto
 _testhub_original_reload = _TestHubPage.reload
@@ -80,7 +82,16 @@ def _testhub_configure_page(page):
     return page
 
 def _testhub_browser_new_page(browser, *args, **kwargs):
+    storage_state = os.environ.get('TESTHUB_STORAGE_STATE_PATH')
+    if storage_state and 'storage_state' not in kwargs:
+        kwargs['storage_state'] = storage_state
     return _testhub_configure_page(_testhub_original_browser_new_page(browser, *args, **kwargs))
+
+def _testhub_browser_new_context(browser, *args, **kwargs):
+    storage_state = os.environ.get('TESTHUB_STORAGE_STATE_PATH')
+    if storage_state and 'storage_state' not in kwargs:
+        kwargs['storage_state'] = storage_state
+    return _testhub_original_browser_new_context(browser, *args, **kwargs)
 
 def _testhub_context_new_page(context, *args, **kwargs):
     return _testhub_configure_page(_testhub_original_context_new_page(context, *args, **kwargs))
@@ -103,6 +114,7 @@ def _testhub_reload(page, *args, **kwargs):
 
 _TestHubLocator.click = _testhub_click
 _TestHubBrowser.new_page = _testhub_browser_new_page
+_TestHubBrowser.new_context = _testhub_browser_new_context
 _TestHubBrowserContext.new_page = _testhub_context_new_page
 _TestHubPage.goto = _testhub_goto
 _TestHubPage.reload = _testhub_reload
@@ -172,6 +184,18 @@ def execute_script(execution_id: int, script_content: str | None = None):
         with tempfile.TemporaryDirectory(prefix=f'testhub_script_{execution.id}_') as workdir:
             script_path = Path(workdir) / 'script.py'
             browser_marker = Path(workdir) / 'browser_started.marker'
+            # 将数据库中的登录态复制到本次脚本工作目录，避免脚本直接访问持久化目录。
+            storage_state_path = None
+            storage_state_id = execution.run_config.get('storage_state_id')
+            if storage_state_id:
+                from .models import StorageState
+                storage_state = StorageState.objects.filter(
+                    pk=storage_state_id, project_id=execution.project_id
+                ).first()
+                if not storage_state or not storage_state.file:
+                    raise ValueError('选择的登录态不存在或不属于当前项目')
+                storage_state_path = Path(workdir) / 'storage_state.json'
+                shutil.copyfile(storage_state.file.path, storage_state_path)
             script_path.write_text(BROWSER_PROBE + '\n' + script, encoding='utf-8')
             env = {
                 'PATH': os.environ.get('PATH', ''),
@@ -187,6 +211,9 @@ def execute_script(execution_id: int, script_content: str | None = None):
                 'TESTHUB_BROWSER_MARKER': str(browser_marker),
                 'TESTHUB_WORKDIR': workdir,
             }
+            # 通过环境变量把临时文件位置传给脚本运行时适配器。
+            if storage_state_path:
+                env['TESTHUB_STORAGE_STATE_PATH'] = str(storage_state_path)
             Path(env['HOME']).mkdir(parents=True, exist_ok=True)
             process = subprocess.Popen(
                 [sys.executable, str(script_path)],
