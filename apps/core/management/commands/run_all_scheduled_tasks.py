@@ -202,12 +202,14 @@ class Command(BaseCommand):
 
                             def run_test():
                                 try:
+                                    # 定时任务将配置的初始登录态传给套件执行器。
                                     executor = TestExecutor(
                                         test_suite=test_suite,
                                         engine=task.engine,
                                         browser=task.browser,
                                         headless=task.headless,
-                                        executed_by=task.created_by
+                                        executed_by=task.created_by,
+                                        storage_state_id=task.storage_state_id
                                     )
                                     executor.run()
 
@@ -362,12 +364,14 @@ class Command(BaseCommand):
                                         temp_suite.save()
 
                                         # 使用 TestExecutor 执行
+                                        # 临时套件执行同样继承任务配置的初始登录态。
                                         executor = TestExecutor(
                                             test_suite=temp_suite,
                                             engine=task.engine,
                                             browser=task.browser,
                                             headless=task.headless,
-                                            executed_by=task.created_by
+                                            executed_by=task.created_by,
+                                            storage_state_id=task.storage_state_id
                                         )
                                         executor.run()
 

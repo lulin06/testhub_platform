@@ -7,6 +7,9 @@
         <el-select v-model="form.browser" size="small" style="width: 150px">
           <el-option label="Chromium" value="chromium" />
         </el-select>
+        <el-select v-model="form.storage_state_id" size="small" clearable placeholder="无登录态" style="width: 170px">
+          <el-option v-for="state in storageStates" :key="state.id" :label="state.name" :value="state.id" />
+        </el-select>
         <el-checkbox v-model="form.headless">{{ $t('uiAutomation.replay.headless') }}</el-checkbox>
         <el-button type="primary" size="small" :loading="running" :disabled="running" @click="run">
           <el-icon><VideoPlay /></el-icon>{{ $t('uiAutomation.common.run') }}
@@ -29,13 +32,14 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { VideoPlay } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
-import { abortTestScriptExecution, getTestExecutionLogs, runRecordedScript, runUnsavedRecordedScript } from '@/api/ui_automation'
+import { abortTestScriptExecution, getStorageStates, getTestExecutionLogs, runRecordedScript, runUnsavedRecordedScript } from '@/api/ui_automation'
 
 const props = defineProps({ visible: Boolean, script: { type: Object, default: null } })
 const emit = defineEmits(['update:visible', 'started'])
 const { t } = useI18n()
 const dialogVisible = computed({ get: () => props.visible, set: value => emit('update:visible', value) })
-const form = reactive({ browser: 'chromium', headless: true, base_url: '' })
+const form = reactive({ browser: 'chromium', headless: true, base_url: '', storage_state_id: null })
+const storageStates = ref([])
 const executionId = ref(null)
 const status = ref('IDLE')
 const logs = ref('')
@@ -46,7 +50,7 @@ let timer = null
 
 const statusType = computed(() => ({ SUCCESS: 'success', FAILED: 'danger', ABORTED: 'info', RUNNING: 'warning' }[status.value] || 'info'))
 const statusText = computed(() => ({ IDLE: t('uiAutomation.status.ready'), PENDING: t('uiAutomation.status.pending'), RUNNING: t('uiAutomation.status.running'), SUCCESS: t('uiAutomation.status.success'), FAILED: t('uiAutomation.status.failed'), ABORTED: t('uiAutomation.status.aborted') }[status.value] || status.value))
-watch(() => props.visible, value => { if (value) reset() })
+watch(() => props.visible, value => { if (value) { reset(); loadStorageStates() } })
 watch(executionId, value => { if (value) poll() })
 
 const reset = () => {
@@ -59,6 +63,17 @@ const reset = () => {
   form.browser = 'chromium'
   form.headless = true
   form.base_url = props.script?.start_url || ''
+  form.storage_state_id = null
+}
+
+const loadStorageStates = async () => {
+  // 弹窗打开时按脚本所属项目加载，避免复用其他项目的登录态。
+  const projectId = props.script?.project_id || props.script?.project?.id
+  if (!projectId) { storageStates.value = []; return }
+  try {
+    const response = await getStorageStates({ project: projectId, page_size: 200 })
+    storageStates.value = response.data.results || response.data
+  } catch { storageStates.value = [] }
 }
 
 const run = async () => {

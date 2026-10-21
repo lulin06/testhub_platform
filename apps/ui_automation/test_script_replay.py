@@ -3,10 +3,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIClient
 
-from apps.ui_automation.models import TestExecution, TestScript, UiProject
+from apps.ui_automation.models import StorageState, TestExecution, TestScript, UiProject
+from apps.ui_automation.serializers import TestCaseStepSerializer
 from apps.ui_automation.script_runner import execute_script, get_playwright_browsers_path
 from apps.ui_automation.script_security import MAX_SCRIPT_BYTES, ScriptSecurityError, analyze_script
 
@@ -111,6 +113,52 @@ with sync_playwright() as p:
         self.assertIn('_testhub_toggle_click', result['normalized_content'])
         self.assertIn('TESTHUB_WORKDIR', result['normalized_content'])
         self.assertEqual({item['category'] for item in result['optimizations']}, {'toggle_state', 'environment_coupling'})
+
+
+class StorageStateApiTests(TestCase):
+    """覆盖登录态上传、下载和步骤参数校验的接口契约。"""
+
+    def setUp(self):
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(username='storage-state-user', password='password')
+        self.project = UiProject.objects.create(
+            name='Storage state project', base_url='https://example.com', owner=self.user
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_upload_and_download_storage_state(self):
+        # 使用最小合法 storage_state 验证文件大小记录和下载内容保持一致。
+        content = b'{"cookies": [], "origins": []}'
+        response = self.client.post(
+            '/api/ui-automation/storage-states/',
+            {
+                'project': self.project.id,
+                'name': '登录态一',
+                'file': SimpleUploadedFile('storage_state.json', content, content_type='application/json'),
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        state = StorageState.objects.get(pk=response.data['id'])
+        self.assertEqual(state.file_size, len(content))
+        download = self.client.get(f'/api/ui-automation/storage-states/{state.id}/download/')
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(b''.join(download.streaming_content), content)
+
+    def test_storage_state_step_requires_operation_and_target(self):
+        # 步骤参数缺失时应在序列化层阻止无效保存或切换动作。
+        missing_operation = TestCaseStepSerializer(data={
+            'step_number': 1, 'action_type': 'storageState', 'action_params': {}
+        })
+        self.assertFalse(missing_operation.is_valid())
+        self.assertIn('action_params', missing_operation.errors)
+
+        missing_target = TestCaseStepSerializer(data={
+            'step_number': 1, 'action_type': 'storageState', 'action_params': {'operation': 'switch'}
+        })
+        self.assertFalse(missing_target.is_valid())
+        self.assertIn('non_field_errors', missing_target.errors)
 
 
 class RecordedScriptApiTests(TestCase):

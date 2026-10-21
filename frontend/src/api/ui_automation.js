@@ -19,6 +19,14 @@ export function getUiProjects(params) {
   })
 }
 
+// 登录态资源管理接口：列表、上传、编辑、下载和删除均按项目范围调用。
+export const getStorageStates = params => request({ url: '/ui-automation/storage-states/', method: 'get', params })
+export const createStorageState = data => request({ url: '/ui-automation/storage-states/', method: 'post', data })
+export const updateStorageState = (id, data) => request({ url: `/ui-automation/storage-states/${id}/`, method: 'patch', data })
+export const deleteStorageState = id => request({ url: `/ui-automation/storage-states/${id}/`, method: 'delete' })
+export const downloadStorageState = id => request({ url: `/ui-automation/storage-states/${id}/download/`, method: 'get', responseType: 'blob' })
+export const updateStorageStateContent = (id, content) => request({ url: `/ui-automation/storage-states/${id}/content/`, method: 'put', data: { content } })
+
 // 创建UI项目
 export function createUiProject(data) {
   return request({

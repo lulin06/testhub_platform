@@ -6,6 +6,7 @@
         <el-select v-model="projectId" :placeholder="t('uiAutomation.project.selectProject')" class="project-selector" @change="onProjectChange">
           <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
         </el-select>
+        <el-button :disabled="!projectId" @click="openStorageStateManager">登录态管理</el-button>
         <el-tooltip :content="t('uiAutomation.variables.selectProject')" :disabled="!!projectId">
           <span>
             <el-button :disabled="!projectId" @click="openVariablesDialog">
@@ -91,10 +92,6 @@
                 <el-icon><Plus /></el-icon>
                 {{ t('uiAutomation.testCase.addStep') }}
               </el-button>
-              <el-button size="small" type="primary" @click="saveTestCase">
-                <el-icon><Check /></el-icon>
-                {{ t('uiAutomation.testCase.saveTestCase') }}
-              </el-button>
               <el-select v-model="selectedEngine" :placeholder="t('uiAutomation.testCase.selectEngine')" size="small" style="width: 130px; margin-right: 10px">
                 <el-option label="Playwright" value="playwright" />
                 <el-option label="Selenium" value="selenium" />
@@ -105,6 +102,10 @@
                 <el-option label="Safari" value="safari" />
                 <el-option label="Edge" value="edge" />
               </el-select>
+              <!-- 运行前选择可选的初始登录态，清空即使用干净上下文。 -->
+              <el-select v-model="selectedStorageStateId" clearable placeholder="选择登录态" size="small" style="width: 150px; margin-right: 10px" :disabled="selectedEngine !== 'playwright'">
+                <el-option v-for="state in storageStates" :key="state.id" :label="state.name" :value="state.id" />
+              </el-select>
               <el-select v-model="headlessMode" :placeholder="t('uiAutomation.testCase.runModeLabel')" size="small" style="width: 110px; margin-right: 10px">
                 <el-option :label="t('uiAutomation.testCase.headedMode')" :value="false" />
                 <el-option :label="t('uiAutomation.testCase.headlessMode')" :value="true" />
@@ -112,6 +113,10 @@
               <el-button size="small" type="success" @click="runTestCase(selectedTestCase)" :loading="isRunning">
                 <el-icon v-if="!isRunning"><CaretRight /></el-icon>
                 {{ isRunning ? t('uiAutomation.testCase.running') : t('uiAutomation.testCase.runLabel') }}
+              </el-button>
+              <el-button size="small" type="primary" @click="saveTestCase">
+                <el-icon><Check /></el-icon>
+                {{ t('uiAutomation.testCase.saveTestCase') }}
               </el-button>
               <el-button size="small" v-if="executionResult" @click="toggleView">
                 <el-icon><component :is="showSteps ? 'View' : 'Edit'" /></el-icon>
@@ -144,6 +149,7 @@
                 v-model="currentSteps"
                 :elements="availableElements"
                 :pages="pages"
+                :storage-states="storageStates"
                 :helper-actions="true"
                 :show-toolbar="false"
                 @helper="({ step, field }) => openDataFactorySelector(step, field)"
@@ -296,6 +302,47 @@
       </template>
     </el-dialog>
 
+    <!-- 登录态管理支持上传文件、手工编辑和项目内资源操作。 -->
+    <el-dialog
+      v-model="showStorageStateDialog"
+      title="登录态管理"
+      width="min(1040px, calc(100vw - 40px))"
+      top="6vh"
+      :close-on-click-modal="false"
+      :close-on-press-escape="true"
+      :show-close="true"
+      destroy-on-close
+      class="project-variables-dialog"
+    >
+      <div class="storage-state-toolbar">
+        <el-button :icon="Plus" @click="openStorageStateEditor()">新建</el-button>
+        <el-upload :show-file-list="false" accept=".json,application/json" :before-upload="uploadStorageState">
+          <el-button type="primary" :icon="Upload" :disabled="!projectId">上传</el-button>
+        </el-upload>
+      </div>
+      <div class="variables-dialog-body storage-state-dialog-body">
+        <el-table :data="storageStates" size="small" v-loading="loadingStorageStates">
+          <el-table-column prop="name" label="名称" width="160" show-overflow-tooltip />
+          <el-table-column prop="source_url" label="来源页面" min-width="180" show-overflow-tooltip />
+          <el-table-column label="大小" width="100"><template #default="scope">{{ formatStorageSize(scope.row.file_size) }}</template></el-table-column>
+          <el-table-column label="创建时间" width="150"><template #default="scope">{{ formatStorageStateTime(scope.row.created_at) }}</template></el-table-column>
+          <el-table-column label="操作" width="180"><template #default="scope">
+            <el-button link @click="downloadStorageStateFile(scope.row)">下载</el-button>
+            <el-button link @click="openStorageStateEditor(scope.row)">编辑</el-button>
+            <el-button link type="danger" @click="removeStorageState(scope.row)">删除</el-button>
+          </template></el-table-column>
+        </el-table>
+      </div>
+    </el-dialog>
+    <el-dialog v-model="showStorageStateEditor" :title="editingStorageState ? '编辑登录态' : '新增登录态'" width="720px">
+      <el-form label-width="100px">
+        <el-form-item label="名称"><el-input v-model="storageStateDraft.name" /></el-form-item>
+        <el-form-item label="来源页面"><el-input v-model="storageStateDraft.source_url" /></el-form-item>
+        <el-form-item label="JSON"><el-input v-model="storageStateDraft.content" type="textarea" :rows="16" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="showStorageStateEditor = false">取消</el-button><el-button type="primary" @click="saveStorageStateEditor">保存</el-button></template>
+    </el-dialog>
+
     <!-- 新建/编辑测试用例对话框 -->
     <el-dialog
       v-model="showCreateDialog"
@@ -405,7 +452,7 @@ import { loadUiVariables, formatUiVariables } from '@/utils/uiVariables'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Search, Plus, Edit, Delete, Check, CaretRight, Picture, Warning, View, ZoomIn, Refresh, WarningFilled, MagicStick, Setting
+  Search, Plus, Edit, Delete, Check, CaretRight, Picture, Warning, View, ZoomIn, Refresh, WarningFilled, MagicStick, Setting, Upload
 } from '@element-plus/icons-vue'
 import DataFactorySelector from '@/components/DataFactorySelector.vue'
 import { useI18n } from 'vue-i18n'
@@ -425,7 +472,8 @@ import {
   runTestCase as runTestCaseApi,
   copyTestCase as copyTestCaseApi,
   getLocatorStrategies,
-  getElementGroupTree
+  getElementGroupTree,
+  getStorageStates, createStorageState, updateStorageState, deleteStorageState, downloadStorageState, updateStorageStateContent
 } from '@/api/ui_automation'
 import { getVariableFunctions } from '@/api/data-factory'
 
@@ -436,6 +484,13 @@ const testCases = ref([])
 const selectedTestCase = ref(null)
 const currentSteps = ref([])
 const currentVariables = ref([])
+const storageStates = ref([])
+const selectedStorageStateId = ref(null)
+const loadingStorageStates = ref(false)
+const showStorageStateDialog = ref(false)
+const showStorageStateEditor = ref(false)
+const editingStorageState = ref(null)
+const storageStateDraft = reactive({ name: '', source_url: '', content: '' })
 const showVariablesDialog = ref(false)
 const variableDraft = ref([])
 const savingVariables = ref(false)
@@ -567,8 +622,68 @@ const onProjectChange = async () => {
   await Promise.all([
     loadTestCases(),
     loadElements(),
-    loadPages()
+    loadPages(),
+    loadStorageStates()
   ])
+}
+
+const loadStorageStates = async () => {
+  // 项目切换后刷新可用登录态，保证选择器和管理列表使用同一数据源。
+  if (!projectId.value) { storageStates.value = []; return }
+  loadingStorageStates.value = true
+  try {
+    const response = await getStorageStates({ project: projectId.value, page_size: 200 })
+    storageStates.value = response.data.results || response.data
+  } catch { storageStates.value = [] } finally { loadingStorageStates.value = false }
+}
+const openStorageStateManager = async () => { await loadStorageStates(); showStorageStateDialog.value = true }
+const formatStorageSize = size => size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KB`
+// 列表时间只保留到分钟，避免后端微秒和时区信息撑开表格。
+const formatStorageStateTime = timestamp => {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return timestamp
+  const pad = value => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+// 上传接口接收原始 JSON 文件，名称默认取文件名。
+const uploadStorageState = async file => {
+  const form = new FormData(); form.append('file', file); form.append('project', projectId.value)
+  form.append('name', file.name.replace(/\.json$/i, '')); form.append('browser', 'chromium')
+  try { await createStorageState(form); await loadStorageStates(); ElMessage.success('登录态已添加') }
+  catch (error) { ElMessage.error(error.response?.data?.file?.[0] || error.response?.data?.error || '上传失败') }
+  return false
+}
+// 打开新增或编辑表单；编辑已有资源时先读取其当前 JSON 内容。
+const openStorageStateEditor = async state => {
+  editingStorageState.value = state || null
+  Object.assign(storageStateDraft, { name: state?.name || '', source_url: state?.source_url || '', content: '{\n  "cookies": [],\n  "origins": []\n}' })
+  if (state) { const response = await downloadStorageState(state.id); storageStateDraft.content = await response.data.text() }
+  showStorageStateEditor.value = true
+}
+const saveStorageStateEditor = async () => {
+  // 手工编辑先在前端校验标准 JSON，再分别调用元数据和内容接口。
+  let content
+  try { content = JSON.parse(storageStateDraft.content) } catch { ElMessage.error('JSON 格式无效'); return }
+  if (!Array.isArray(content.cookies || []) || !Array.isArray(content.origins || [])) { ElMessage.error('cookies 和 origins 必须为数组'); return }
+  try {
+    if (editingStorageState.value) {
+      await updateStorageState(editingStorageState.value.id, { name: storageStateDraft.name, source_url: storageStateDraft.source_url })
+      await updateStorageStateContent(editingStorageState.value.id, content)
+    } else {
+      const file = new File([JSON.stringify(content, null, 2)], `${storageStateDraft.name}.json`, { type: 'application/json' })
+      const form = new FormData(); form.append('project', projectId.value); form.append('name', storageStateDraft.name); form.append('source_url', storageStateDraft.source_url); form.append('file', file)
+      await createStorageState(form)
+    }
+    showStorageStateEditor.value = false; await loadStorageStates()
+  } catch (error) { ElMessage.error(error.response?.data?.content?.[0] || error.message || '保存失败') }
+}
+const downloadStorageStateFile = async state => {
+  const response = await downloadStorageState(state.id); const url = URL.createObjectURL(response.data)
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${state.name}.json`; anchor.click(); URL.revokeObjectURL(url)
+}
+const removeStorageState = async state => {
+  try { await ElMessageBox.confirm(`确定删除登录态“${state.name}”吗？`, '确认删除', { type: 'warning' }); await deleteStorageState(state.id); await loadStorageStates() } catch {}
 }
 
 // 将接口返回的测试步骤转换为结构化步骤组件所需的编辑字段。
@@ -626,6 +741,7 @@ const addStep = () => {
     wait_time: 1000,
     assert_type: 'textContains',
     assert_value: '',
+    action_params: {},
     description: '',
     locator_strategy: 'role',
     locator_value: '',
@@ -716,7 +832,8 @@ const runTestCase = async (testCase) => {
       project_id: projectId.value,
       engine: selectedEngine.value,
       browser: selectedBrowser.value,
-      headless: headlessMode.value
+      headless: headlessMode.value,
+      storage_state_id: selectedEngine.value === 'playwright' ? selectedStorageStateId.value : null
     })
 
     executionResult.value = response.data
@@ -1211,6 +1328,8 @@ onMounted(async () => {
 .variables-case-heading > span { color: var(--el-text-color-secondary); flex-shrink: 0; }
 .variables-case-heading strong { overflow-wrap: anywhere; }
 .variables-dialog-body { max-height: 65vh; overflow-y: auto; padding-right: 4px; }
+.storage-state-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.storage-state-dialog-body { padding-right: 0; }
 
 .main-content {
   flex: 1;

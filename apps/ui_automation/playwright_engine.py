@@ -210,7 +210,7 @@ class PlaywrightTestEngine:
                 if playwright:
                     await playwright.stop()
 
-    async def start(self):
+    async def start(self, storage_state_path=None):
         """启动浏览器"""
         try:
             self.playwright = await async_playwright().start()
@@ -237,10 +237,11 @@ class PlaywrightTestEngine:
                 ]
             )
 
-            # 创建浏览器上下文
+            # 创建浏览器上下文；有初始登录态时由 Playwright 直接加载文件。
             self.context = await self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                **({'storage_state': storage_state_path} if storage_state_path else {})
             )
 
             # 创建页面
@@ -251,6 +252,67 @@ class PlaywrightTestEngine:
         except Exception as e:
             logger.error(f"启动浏览器失败: {str(e)}")
             raise
+
+    async def apply_storage_state_action(self, params, *, project_id, user):
+        """在低代码用例中保存、切换或清除登录态。"""
+        import tempfile
+        from pathlib import Path
+        from asgiref.sync import sync_to_async
+        from django.core.files.base import ContentFile
+        from .models import StorageState
+
+        operation = params.get('operation')
+        # 保存动作把当前上下文导出为资源，覆盖和另存为共用同一持久化流程。
+        if operation == 'save':
+            name = str(params.get('name') or '').strip()
+            state_id = params.get('storage_state_id')
+            if params.get('mode') == 'overwrite':
+                state = await sync_to_async(
+                    lambda: StorageState.objects.filter(pk=state_id, project_id=project_id).first()
+                )()
+                if not state:
+                    raise ValueError('要覆盖的登录态不存在或不属于当前项目')
+            else:
+                state = StorageState(project_id=project_id, name=name, created_by=user)
+            with tempfile.NamedTemporaryFile(suffix='.json') as temp_file:
+                await self.context.storage_state(path=temp_file.name)
+                raw = Path(temp_file.name).read_bytes()
+            state.name = name or state.name
+            state.source_url = self.page.url
+            state.browser = self.browser_type
+            def persist_state():
+                state.file.save(f'{state.name}.json', ContentFile(raw), save=False)
+                state.file_size = len(raw)
+                state.save()
+                return state.id
+            await sync_to_async(persist_state)()
+            return f'登录态已保存：{state.name}'
+        # 切换或清除必须重建 BrowserContext，确保旧 Cookie 和 localStorage 不会残留。
+        if operation in {'switch', 'clear'}:
+            url = self.page.url
+            state_path = None
+            if operation == 'switch':
+                target_id = params.get('storage_state_id')
+                state = await sync_to_async(
+                    lambda: StorageState.objects.filter(pk=target_id, project_id=project_id).first()
+                )()
+                if not state:
+                    raise ValueError('目标登录态不存在或不属于当前项目')
+                state_path = state.file.path
+            await self.page.close()
+            await self.context.close()
+            context_options = {
+                'viewport': {'width': 1920, 'height': 1080},
+                'user_agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            }
+            if state_path:
+                context_options['storage_state'] = state_path
+            self.context = await self.browser.new_context(**context_options)
+            self.page = await self.context.new_page()
+            if url and url != 'about:blank':
+                await self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            return '已切换到指定登录态' if state_path else '已清除登录态'
+        raise ValueError('未知的登录态操作')
 
     async def stop(self):
         """关闭浏览器"""

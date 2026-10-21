@@ -261,6 +261,12 @@
             <el-option label="Edge" value="edge" />
           </el-select>
         </el-form-item>
+        <!-- 套件运行使用同一个初始登录态，登录态步骤仍由用例自身控制。 -->
+        <el-form-item v-if="runConfig.engine === 'playwright'" label="登录态">
+          <el-select v-model="runConfig.storage_state_id" placeholder="无登录态" clearable>
+            <el-option v-for="state in storageStates" :key="state.id" :label="state.name" :value="state.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item :label="$t('uiAutomation.suite.executionMode')">
           <el-radio-group v-model="runConfig.headless">
             <el-radio :label="false">{{ $t('uiAutomation.suite.headedMode') }}</el-radio>
@@ -302,7 +308,8 @@ import {
   addTestCaseToTestSuite,
   removeTestCaseFromTestSuite,
   updateTestCaseOrder,
-  runTestSuite
+  runTestSuite,
+  getStorageStates
 } from '@/api/ui_automation'
 import { useI18n } from 'vue-i18n'
 
@@ -354,8 +361,10 @@ const isTestCaseAddable = (testCase) => !selectedTestCaseIds.value.has(testCase.
 const runConfig = reactive({
   engine: 'playwright',
   browser: 'chrome',
-  headless: false
+  headless: false,
+  storage_state_id: null
 })
+const storageStates = ref([])
 const currentRunningSuite = ref(null)
 
 // 计算属性 - 过滤后的可用测试用例
@@ -572,7 +581,7 @@ const deleteSuite = async (id) => {
 }
 
 // 运行套件
-const runSuite = (suite) => {
+const runSuite = async (suite) => {
   // 检查是否包含测试用例
   if (!suite.test_case_count || suite.test_case_count === 0) {
     ElMessage.warning(t('uiAutomation.suite.messages.noCases'))
@@ -580,6 +589,12 @@ const runSuite = (suite) => {
   }
 
   currentRunningSuite.value = suite
+  // 每次打开运行对话框都重新按套件项目加载登录态。
+  runConfig.storage_state_id = null
+  try {
+    const response = await getStorageStates({ project: suite.project?.id || suite.project_id, page_size: 200 })
+    storageStates.value = response.data.results || response.data
+  } catch { storageStates.value = [] }
   showRunDialog.value = true
 }
 
@@ -591,7 +606,8 @@ const confirmRunSuite = async () => {
       use_ai: false,
       engine: runConfig.engine,
       browser: runConfig.browser,
-      headless: runConfig.headless
+      headless: runConfig.headless,
+      storage_state_id: runConfig.engine === 'playwright' ? runConfig.storage_state_id : null
     }
 
     const response = await runTestSuite(currentRunningSuite.value.id, requestData)

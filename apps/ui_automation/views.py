@@ -6,7 +6,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
-from django.http import HttpResponse
+from django.http import HttpResponse, FileResponse
+from django.core.files.base import ContentFile
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import models, transaction
 from django.utils import timezone
@@ -20,7 +21,7 @@ from urllib.parse import urlparse
 from urllib.parse import unquote
 
 from .models import (
-    UiProject, LocatorStrategy, Element, TestScript, TestSuite,
+    UiProject, StorageState, LocatorStrategy, Element, TestScript, TestSuite,
     TestSuiteScript, TestExecution, Screenshot,
     ElementGroup, PageObject, PageObjectElement, ScriptStep, ScriptElementUsage,
     TestCase, TestCaseStep, TestCaseExecution, OperationRecord,
@@ -29,7 +30,7 @@ from .models import (
     AICase, AIExecutionRecord
 )
 from .serializers import (
-    UiProjectSerializer, UiProjectCreateSerializer, UiProjectUpdateSerializer,
+    UiProjectSerializer, UiProjectCreateSerializer, UiProjectUpdateSerializer, StorageStateSerializer,
     LocatorStrategySerializer,
     ElementSerializer, ElementEnhancedSerializer,
     TestScriptSerializer, TestScriptCreateSerializer, TestScriptUpdateSerializer,
@@ -297,6 +298,79 @@ class UiProjectViewSet(viewsets.ModelViewSet):
         # 记录操作（在删除前记录）
         log_operation('delete', 'project', instance.id, instance.name, self.request.user)
         soft_delete_module_project(instance, self.request.user)
+
+
+class StorageStateViewSet(viewsets.ModelViewSet):
+    """提供登录态的项目权限过滤、文件管理和 JSON 内容编辑接口。"""
+    queryset = StorageState.objects.all()
+    serializer_class = StorageStateSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['project', 'browser']
+    search_fields = ['name', 'source_url']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        user = self.request.user
+        projects = UiProject.objects.filter(models.Q(owner=user) | models.Q(members=user)).distinct()
+        return StorageState.objects.filter(project__in=projects).select_related('project', 'created_by')
+
+    def _project(self, project_id):
+        return UiProject.objects.filter(
+            pk=project_id,
+        ).filter(models.Q(owner=self.request.user) | models.Q(members=self.request.user)).distinct().first()
+
+    def perform_create(self, serializer):
+        project_id = self.request.data.get('project') or self.request.data.get('project_id')
+        project = self._project(project_id)
+        if not project:
+            raise ValidationError({'project': '项目不存在或无权访问'})
+        instance = serializer.save(project=project, created_by=self.request.user)
+        if instance.file and not instance.file_size:
+            instance.file_size = instance.file.size
+            instance.save(update_fields=['file_size'])
+        log_operation('create', 'storage_state', instance.id, instance.name, self.request.user)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        if instance.file:
+            instance.file_size = instance.file.size
+            instance.save(update_fields=['file_size'])
+        log_operation('edit', 'storage_state', instance.id, instance.name, self.request.user)
+
+    def perform_destroy(self, instance):
+        name = instance.name
+        if instance.file:
+            instance.file.delete(save=False)
+        log_operation('delete', 'storage_state', instance.id, name, self.request.user)
+        instance.delete()
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        # 下载前复用 get_object，确保资源仍属于当前用户可访问的项目。
+        instance = self.get_object()
+        return FileResponse(instance.file.open('rb'), as_attachment=True, filename=f'{instance.name}.json')
+
+    @action(detail=True, methods=['put'], parser_classes=[JSONParser])
+    def content(self, request, pk=None):
+        # 手工编辑只接受 Playwright storage_state 的标准 cookies/origins 结构。
+        instance = self.get_object()
+        payload = request.data.get('content', request.data)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise ValidationError({'content': '登录态 JSON 格式无效'}) from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get('cookies', []), list) or not isinstance(payload.get('origins', []), list):
+            raise ValidationError({'content': '登录态 JSON 必须包含 cookies 和 origins 数组'})
+        raw = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
+        if instance.file:
+            instance.file.delete(save=False)
+        instance.file.save(instance.file.name.rsplit('/', 1)[-1] or 'storage_state.json', ContentFile(raw), save=False)
+        instance.file_size = len(raw)
+        instance.save(update_fields=['file', 'file_size', 'updated_at'])
+        return Response(self.get_serializer(instance).data)
 
 
 class LocatorStrategyViewSet(viewsets.ModelViewSet):
@@ -1043,6 +1117,15 @@ class TestScriptViewSet(viewsets.ModelViewSet):
             if browser not in {'chromium', 'chrome'}:
                 return Response({'error': '本期回放仅支持Chromium'}, status=status.HTTP_400_BAD_REQUEST)
             headless = _request_bool(request.data.get('headless'), True)
+            # 记录回放时只允许使用当前脚本项目下的登录态。
+            storage_state_id = request.data.get('storage_state_id')
+            selected_state = None
+            if storage_state_id:
+                selected_state = StorageState.objects.filter(
+                    pk=storage_state_id, project=script.project
+                ).first()
+                if not selected_state:
+                    return Response({'error': '登录态不存在或不属于当前项目'}, status=status.HTTP_400_BAD_REQUEST)
             execution = TestExecution.objects.create(
                 project=script.project,
                 test_script=script,
@@ -1056,6 +1139,7 @@ class TestScriptViewSet(viewsets.ModelViewSet):
                     'base_url': str(request.data.get('base_url') or '').strip(),
                     'content_hash': analysis['content_hash'],
                     'script_source': 'saved_snapshot',
+                    'storage_state_id': selected_state.id if selected_state else None,
                 },
             )
             log_operation('run', 'script', script.id, script.name, request.user)
@@ -1083,6 +1167,15 @@ class TestScriptViewSet(viewsets.ModelViewSet):
             browser = str(request.data.get('browser') or 'chromium').lower()
             if browser not in {'chromium', 'chrome'}:
                 return Response({'error': '本期回放仅支持Chromium'}, status=status.HTTP_400_BAD_REQUEST)
+            # 未保存脚本也沿用相同的项目边界校验，避免跨项目读取登录态。
+            storage_state_id = request.data.get('storage_state_id')
+            selected_state = None
+            if storage_state_id:
+                selected_state = StorageState.objects.filter(
+                    pk=storage_state_id, project=project
+                ).first()
+                if not selected_state:
+                    return Response({'error': '登录态不存在或不属于当前项目'}, status=status.HTTP_400_BAD_REQUEST)
             execution = TestExecution.objects.create(
                 project=project,
                 test_script=None,
@@ -1097,6 +1190,7 @@ class TestScriptViewSet(viewsets.ModelViewSet):
                     'start_url': str(request.data.get('start_url') or analysis.get('start_url') or '').strip(),
                     'content_hash': analysis['content_hash'],
                     'script_source': 'editor_snapshot',
+                    'storage_state_id': selected_state.id if selected_state else None,
                 },
             )
             start_script_execution(execution.id, analysis['normalized_content'])
@@ -1268,6 +1362,9 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
         engine = request.data.get('engine', 'playwright')
         browser = request.data.get('browser', 'chrome')
         headless = request.data.get('headless', False)
+        storage_state_id = request.data.get('storage_state_id') if engine == 'playwright' else None
+        if storage_state_id and not StorageState.objects.filter(pk=storage_state_id, project=test_suite.project).exists():
+            return Response({'error': '登录态不存在或不属于当前项目'}, status=status.HTTP_400_BAD_REQUEST)
 
         if engine == 'selenium':
             from .selenium_engine import SeleniumTestEngine
@@ -1308,7 +1405,8 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
                     engine=engine,
                     browser=browser,
                     headless=headless,
-                    executed_by=request.user
+                    executed_by=request.user,
+                    storage_state_id=storage_state_id
                 )
                 executor.run()
 
@@ -1464,6 +1562,19 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                     raise ValidationError({'steps': [f'步骤{index}的目标元素不属于当前项目']})
 
             try:
+                # 登录态步骤的目标资源必须与测试用例项目一致。
+                action_params = step.get('action_params') or {}
+                if action_type == 'storageState':
+                    operation = action_params.get('operation')
+                    referenced_state_id = action_params.get('storage_state_id')
+                    if (
+                        (operation in {'switch', 'save'} and action_params.get('mode') == 'overwrite')
+                        or operation == 'switch'
+                    ):
+                        if not StorageState.objects.filter(
+                            pk=referenced_state_id, project_id=project_id
+                        ).exists():
+                            raise ValidationError({'steps': [f'步骤{index}选择的登录态不存在或不属于当前项目']})
                 validate_test_case_step_data(
                     action_type=action_type,
                     assert_type=assert_type,
@@ -1471,6 +1582,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                     assert_value=step.get('assert_value', ''),
                     element=element,
                     project_id=project_id,
+                    action_params=action_params,
                 )
             except ValidationError as exc:
                 detail = exc.detail
@@ -1518,6 +1630,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                         action_type=step_data.get('action_type', 'click'),
                         element_id=step_data.get('element') if step_data.get('element') else None,
                         input_value=step_data.get('input_value', ''),
+                        action_params=step_data.get('action_params') or {},
                         wait_time=step_data.get('wait_time', 1000),
                         assert_type=step_data.get('assert_type', ''),
                         assert_value=step_data.get('assert_value', ''),
@@ -1556,6 +1669,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                     action_type=step.action_type,
                     element=step.element,
                     input_value=step.input_value,
+                    action_params=step.action_params,
                     wait_time=step.wait_time,
                     assert_type=step.assert_type,
                     assert_value=step.assert_value,
@@ -1621,6 +1735,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                         action_type=step_data.get('action_type', 'click'),
                         element_id=step_data.get('element') if step_data.get('element') else None,
                         input_value=step_data.get('input_value', ''),
+                        action_params=step_data.get('action_params') or {},
                         wait_time=step_data.get('wait_time', 1000),
                         assert_type=step_data.get('assert_type', ''),
                         assert_value=step_data.get('assert_value', ''),
@@ -1816,6 +1931,8 @@ class TestCaseViewSet(viewsets.ModelViewSet):
         try:
             # 获取执行引擎选择，默认使用playwright
             engine_type = request.data.get('engine', 'playwright')
+            if engine_type == 'selenium' and test_case.steps.filter(action_type='storageState').exists():
+                return Response({'error': '包含登录态步骤的测试用例必须使用 Playwright 执行'}, status=status.HTTP_400_BAD_REQUEST)
 
             # 创建执行记录
             execution = TestCaseExecution.objects.create(
@@ -1917,6 +2034,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                     'wait_time': step.wait_time,
                     'assert_type': step.assert_type,
                     'assert_value': step.assert_value,
+                    'action_params': step.action_params or {},
                 }
 
                 # 获取元素数据
@@ -2172,6 +2290,7 @@ class TestCaseViewSet(viewsets.ModelViewSet):
 
                     async def run_test():
                         """异步执行测试"""
+                        from asgiref.sync import sync_to_async
                         # 根据浏览器类型选择
                         browser_map = {
                             'chrome': 'chromium',
@@ -2190,7 +2309,18 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                             engine.initialize_variables(test_case.project.variables)
                             # 启动浏览器
                             execution_logs.append("========== 初始化浏览器 ==========")
-                            await engine.start()
+                            selected_state = None
+                            selected_state_id = request.data.get('storage_state_id')
+                            if selected_state_id and engine_type == 'playwright':
+                                # 启动独立浏览器上下文时注入可选的初始登录态。
+                                selected_state = await sync_to_async(
+                                    lambda: StorageState.objects.filter(
+                                        pk=selected_state_id, project_id=test_case.project_id
+                                    ).first()
+                                )()
+                                if not selected_state:
+                                    raise ValidationError({'storage_state_id': '登录态不存在或不属于当前项目'})
+                            await engine.start(selected_state.file.path if selected_state else None)
                             mode_text = "无头模式" if headless else "有头模式"
                             execution_logs.append(
                                 f"✓ {browser_type.capitalize()} 浏览器启动成功 (Playwright, {mode_text})")
@@ -2242,8 +2372,16 @@ class TestCaseViewSet(viewsets.ModelViewSet):
                                     # 执行步骤
                                     try:
                                         execution_logs.append(f"  [调试] 准备执行步骤...")
-                                        success, step_log, screenshot_base64 = await engine.execute_step(step,
-                                                                                                         element_data or {})
+                                        # 登录态动作会重建上下文，因此必须由 Playwright 引擎处理。
+                                        if action_type == 'storageState':
+                                            step_params = step_info.get('action_params') or {}
+                                            step_log = await engine.apply_storage_state_action(
+                                                step_params, project_id=test_case.project_id, user=request.user
+                                            )
+                                            success, screenshot_base64 = True, None
+                                        else:
+                                            success, step_log, screenshot_base64 = await engine.execute_step(step,
+                                                                                                             element_data or {})
                                         execution_logs.append(f"  [调试] 步骤执行完成, success={success}")
 
                                         execution_logs.append(f"  {step_log}")
@@ -2515,7 +2653,7 @@ class TestCaseStepViewSet(viewsets.ModelViewSet):
             models.Q(owner=user) | models.Q(members=user)
         ).distinct()
         accessible_test_cases = TestCase.objects.filter(project__in=accessible_projects)
-        return TestCaseStep.objects.filter(test_case__in=accessible_projects)
+        return TestCaseStep.objects.filter(test_case__in=accessible_test_cases)
 
 
 class TestCaseExecutionViewSet(viewsets.ModelViewSet):
@@ -2701,6 +2839,8 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                             'error': error_msg,
                             'message': 'Playwright 浏览器未就绪，请先安装后再执行测试套件任务'
                         }, status=status.HTTP_400_BAD_REQUEST)
+                elif task.storage_state_id:
+                    return Response({'error': '只有 Playwright 任务支持登录态'}, status=status.HTTP_400_BAD_REQUEST)
 
                 # 更新套件执行状态
                 test_suite.execution_status = 'running'
@@ -2717,7 +2857,8 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                             engine=task.engine,
                             browser=task.browser,
                             headless=task.headless,
-                            executed_by=task.created_by
+                            executed_by=task.created_by,
+                            storage_state_id=task.storage_state_id
                         )
                         executor.run()
 
@@ -2775,6 +2916,11 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                         'error': '找不到配置的测试用例'
                     }, status=status.HTTP_400_BAD_REQUEST)
 
+                if task.engine == 'selenium' and TestCaseStep.objects.filter(
+                    test_case_id__in=test_case_ids, action_type='storageState'
+                ).exists():
+                    return Response({'error': '包含登录态步骤的任务必须使用 Playwright 执行'}, status=status.HTTP_400_BAD_REQUEST)
+
                 if task.engine == 'playwright':
                     from .playwright_engine import PlaywrightTestEngine
                     is_ready, error_msg = PlaywrightTestEngine.check_execution_environment_sync(task.browser)
@@ -2783,6 +2929,17 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                             'error': error_msg,
                             'message': 'Playwright 浏览器未就绪，请先安装后再执行测试用例任务'
                         }, status=status.HTTP_400_BAD_REQUEST)
+                elif task.storage_state_id:
+                    return Response({'error': '只有 Playwright 任务支持登录态'}, status=status.HTTP_400_BAD_REQUEST)
+
+                storage_state_path = None
+                if task.storage_state_id:
+                    selected_state = StorageState.objects.filter(
+                        pk=task.storage_state_id, project=task.project
+                    ).first()
+                    if not selected_state:
+                        return Response({'error': '登录态不存在或不属于任务关联项目'}, status=status.HTTP_400_BAD_REQUEST)
+                    storage_state_path = selected_state.file.path
 
                 # 在后台线程中执行测试用例
                 import threading
@@ -2827,6 +2984,7 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                         'wait_time': step.wait_time,
                                         'assert_type': step.assert_type,
                                         'assert_value': step.assert_value,
+                                        'action_params': step.action_params or {},
                                     }
 
                                     if step.element:
@@ -2955,7 +3113,7 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                             # 定时任务的每个独立用例都创建自己的变量上下文。
                                             engine.initialize_variables(test_case.project.variables)
                                             # 启动浏览器
-                                            await engine.start()
+                                            await engine.start(storage_state_path)
                                             execution_logs.append("✓ 浏览器启动成功")
 
                                             # 获取项目基础URL（同步操作）
@@ -2976,8 +3134,18 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                                                 action_type = step_info['action_type']
                                                 element_data = step_info['element_data']
 
-                                                success, step_log, screenshot_base64 = await engine.execute_step(step,
-                                                                                                                 element_data or {})
+                                                # 套件执行沿用测试用例的登录态步骤处理逻辑。
+                                                if action_type == 'storageState':
+                                                    step_log = await engine.apply_storage_state_action(
+                                                        step_info.get('action_params') or {},
+                                                        project_id=test_case.project_id,
+                                                        user=task.created_by,
+                                                    )
+                                                    success, screenshot_base64 = True, None
+                                                else:
+                                                    success, step_log, screenshot_base64 = await engine.execute_step(
+                                                        step, element_data or {}
+                                                    )
 
                                                 step_results.append({
                                                     'step_number': i,
