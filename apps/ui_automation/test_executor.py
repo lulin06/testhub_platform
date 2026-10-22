@@ -1002,21 +1002,21 @@ class TestExecutor:
                     step_result['success'] = True
 
                 elif step_data['action_type'] == 'waitFor':
-                    # 检测是否是下拉框选项（下拉框选项可能是隐藏的）
+                    # 选项可先附着到 DOM 再显示；其他元素必须实际可见。
+                    normalized_locator = locator_value.lower().replace(' ', '')
                     is_dropdown_option_wait = (
-                            (locator_strategy.lower() == 'xpath' and '//li' in locator_value) or
-                            'el-select-dropdown' in locator_value.lower() or
-                            'role="option"' in locator_value.lower() or
-                            ('li' in locator_value.lower() and (
-                                        'ul' in locator_value.lower() or 'ol' in locator_value.lower()))
+                        'el-select-dropdown' in normalized_locator or
+                        (locator_strategy == 'role' and normalized_locator == 'option') or
+                        any(role_selector in normalized_locator for role_selector in (
+                            '[role="option"]', "[role='option']", '[role=option]',
+                            '[@role="option"]', "[@role='option']",
+                        ))
                     )
 
                     if is_dropdown_option_wait:
-                        # 对于下拉框选项，只等待元素在DOM中（attached），不要求可见
                         target_locator.wait_for(state='attached', timeout=step_data['wait_time'])
                     else:
-                        # 普通元素：等待可见
-                        target_locator.wait_for(timeout=step_data['wait_time'])
+                        target_locator.wait_for(state='visible', timeout=step_data['wait_time'])
 
                     step_result['success'] = True
 
@@ -1070,6 +1070,33 @@ class TestExecutor:
                         step_result['success'] = count > 0
                         if count == 0:
                             step_result['error'] = f"✗ 断言失败: 元素 '{element_name}' 不存在"
+                    elif step_data['assert_type'] == 'hasAttribute':
+                        attr_spec = step_data['assert_value'].strip()
+                        if not attr_spec:
+                            step_result['error'] = '✗ hasAttribute 断言需要指定属性名'
+                        else:
+                            attr_name, separator, expected_value = attr_spec.partition('=')
+                            attr_name = attr_name.strip()
+                            if not attr_name:
+                                step_result['error'] = '✗ hasAttribute 断言需要指定属性名'
+                            else:
+                                actual_value = target_locator.get_attribute(
+                                    attr_name, timeout=step_data['wait_time']
+                                )
+                                step_result['success'] = actual_value is not None and (
+                                    not separator or actual_value == expected_value
+                                )
+                                if not step_result['success']:
+                                    if separator:
+                                        step_result['error'] = (
+                                            f"✗ 断言失败: 属性 '{attr_name}' 值不匹配\n"
+                                            f"  - 期望: '{expected_value}'\n  - 实际: '{actual_value}'"
+                                        )
+                                    else:
+                                        step_result['error'] = (
+                                            f"✗ 断言失败: 元素 '{element_name}' "
+                                            f"不包含属性 '{attr_name}'"
+                                        )
 
                 elif step_data['action_type'] == 'wait':
                     self.current_page.wait_for_timeout(step_data['wait_time'])
