@@ -666,6 +666,11 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
             'element_locator_strategy', 'element_locator_options',
             'input_value', 'action_params', 'wait_time', 'assert_type', 'assert_value', 'description', 'created_at'
         ]
+        extra_kwargs = {
+            'assert_value': {
+                'help_text': 'hasAttribute 使用属性名或“属性名=期望值”，例如 href 或 href=https://example.com。',
+            },
+        }
 
     def get_element_locator_strategy(self, obj):
         """返回元素关联的定位策略名称。"""

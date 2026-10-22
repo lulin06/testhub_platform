@@ -862,6 +862,36 @@ class PlaywrightTestEngine:
                 log += f"  - 执行时间: {execution_time}秒"
                 return True, log, None
 
+            elif action_type == 'press':
+                await locator.press(resolved_input_value, timeout=timeout_ms)
+                execution_time = round(time.time() - start_time, 2)
+                log = f"✓ 在元素 '{element_name}' 上按下按键 '{resolved_input_value}' 成功\n"
+                log += f"  - 定位器: {locator_strategy}={locator_value}\n"
+                log += f"  - 超时设置: {timeout_ms / 1000}秒\n"
+                log += f"  - 执行时间: {execution_time}秒"
+                return True, log, None
+
+            elif action_type == 'select':
+                await locator.select_option(value=resolved_input_value, timeout=timeout_ms)
+                execution_time = round(time.time() - start_time, 2)
+                log = f"✓ 在下拉框 '{element_name}' 中选择选项 '{resolved_input_value}' 成功\n"
+                log += f"  - 定位器: {locator_strategy}={locator_value}\n"
+                log += f"  - 超时设置: {timeout_ms / 1000}秒\n"
+                log += f"  - 执行时间: {execution_time}秒"
+                return True, log, None
+
+            elif action_type in {'check', 'uncheck'}:
+                await getattr(locator, action_type)(timeout=timeout_ms, force=force_action)
+                verb = '勾选' if action_type == 'check' else '取消勾选'
+                execution_time = round(time.time() - start_time, 2)
+                log = f"✓ {verb}复选框 '{element_name}' 成功\n"
+                log += f"  - 定位器: {locator_strategy}={locator_value}\n"
+                log += f"  - 超时设置: {timeout_ms / 1000}秒\n"
+                if force_action:
+                    log += "  - 强制操作: 是\n"
+                log += f"  - 执行时间: {execution_time}秒"
+                return True, log, None
+
             elif action_type == 'getText':
                 text = await locator.inner_text(timeout=timeout_ms)
                 if resolved_assert_value.strip():
@@ -964,6 +994,32 @@ class PlaywrightTestEngine:
                         screenshot = await self.page.screenshot()
                         screenshot_base64 = f"data:image/png;base64,{base64.b64encode(screenshot).decode()}"
                         return False, log, screenshot_base64
+
+                elif step.assert_type == 'hasAttribute':
+                    attr_spec = resolved_assert_value.strip()
+                    if not attr_spec:
+                        return False, "✗ hasAttribute 断言需要指定属性名", None
+                    attr_name, separator, expected_value = attr_spec.partition('=')
+                    attr_name = attr_name.strip()
+                    if not attr_name:
+                        return False, "✗ hasAttribute 断言需要指定属性名", None
+
+                    actual_value = await locator.get_attribute(attr_name, timeout=timeout_ms)
+                    passed = actual_value is not None and (
+                        not separator or actual_value == expected_value
+                    )
+                    if passed:
+                        expectation = f"'{attr_name}={expected_value}'" if separator else f"'{attr_name}'"
+                        return True, f"✓ 断言通过: 元素 '{element_name}' 包含属性 {expectation}", None
+
+                    if separator:
+                        log = f"✗ 断言失败: 属性 '{attr_name}' 值不匹配\n"
+                        log += f"  - 期望: '{expected_value}'\n  - 实际: '{actual_value}'"
+                    else:
+                        log = f"✗ 断言失败: 元素 '{element_name}' 不包含属性 '{attr_name}'"
+                    screenshot = await self.page.screenshot()
+                    screenshot_base64 = f"data:image/png;base64,{base64.b64encode(screenshot).decode()}"
+                    return False, log, screenshot_base64
 
 
 
