@@ -2,6 +2,7 @@
 
 import ast
 import io
+import os
 import tokenize
 
 from .playwright_engine import playwright_locator_expression
@@ -185,6 +186,28 @@ def parse_recording(content):
                         })
                         continue
                     if method not in ACTION_MAP:
+                        if method == 'storage_state':
+                            path = next(
+                                (_literal(keyword.value) for keyword in call.keywords if keyword.arg == 'path'),
+                                'storage_state.json',
+                            )
+                            name = os.path.splitext(os.path.basename(str(path)))[0] or 'storage_state'
+                            steps.append({
+                                'action_type': 'storageState',
+                                'input_value': '',
+                                'wait_time': 1000,
+                                'description': '保存登录态',
+                                'action_params': {
+                                    'operation': 'save',
+                                    'mode': 'save_as',
+                                    'name': name,
+                                    'storage_state_id': None,
+                                },
+                                'source_line_start': statement.lineno,
+                                'source_line_end': getattr(statement, 'end_lineno', statement.lineno),
+                                'raw_code': ast.unparse(statement),
+                            })
+                            continue
                         if method in {'launch', 'new_context', 'new_page', 'close', 'stop'}:
                             continue
                         raise UnsupportedRecordingCode(statement.lineno, ast.unparse(statement))
@@ -225,6 +248,13 @@ def _locator_code(locator):
     return playwright_locator_expression(
         locator.get('strategy', 'css'), locator.get('value', ''), locator.get('options'),
     )
+
+
+def _storage_state_name(params):
+    """将手动用例的登录态名称转换成脚本可用的相对 JSON 文件名。"""
+    name = str((params or {}).get('name') or '').strip()
+    safe_name = os.path.basename(name).strip() or 'storage_state'
+    return safe_name if safe_name.endswith('.json') else f'{safe_name}.json'
 
 
 def generate_code(steps, start_url=''):
@@ -268,6 +298,26 @@ def generate_code(steps, start_url=''):
             lines.append(f'    page = context.pages[{page_index}]')
         elif action == 'screenshot':
             lines.append('    page.screenshot()')
+        elif action == 'storageState':
+            params = step.get('action_params') or {}
+            operation = params.get('operation')
+            if operation == 'save':
+                # 参数结构与手动用例的 storageState 动作保持一致；文件只作为脚本回放的落点。
+                lines.append(f'    context.storage_state(path={_py_literal(_storage_state_name(params))})')
+            elif operation == 'switch':
+                lines.extend([
+                    '    context.close()',
+                    f'    context = browser.new_context(ignore_https_errors=True, storage_state={_py_literal(_storage_state_name(params))})',
+                    '    page = context.new_page()',
+                ])
+            elif operation == 'clear':
+                lines.extend([
+                    '    context.close()',
+                    '    context = browser.new_context(ignore_https_errors=True)',
+                    '    page = context.new_page()',
+                ])
+            else:
+                lines.append('    # 登录态动作参数无效')
         elif action == 'assert':
             assert_type = step.get('assert_type')
             if assert_type == 'isVisible':

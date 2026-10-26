@@ -124,6 +124,16 @@ _TestHubBrowserType.launch = _testhub_launch
 
 def _failure_guidance(log_text: str) -> str:
     text = (log_text or '').lower()
+    # Browser startup failures happen before a locator or page action exists;
+    # keep them actionable instead of returning a blank diagnostic section.
+    if any(marker in text for marker in (
+        'targetclosederror',
+        'browsertype.launch',
+        'mach_portrendezvous',
+        'permission denied',
+        'sigtrap',
+    )):
+        return '浏览器启动失败：检查 Playwright 浏览器缓存、系统进程权限和运行环境；在 macOS 受限环境中请改用 CI 或允许启动浏览器子进程的执行环境。'
     if 'strict mode violation' in text or re.search(r'resolved to \d+ elements', text):
         return '定位器可能匹配多个元素：改用带名称/属性的语义定位，必要时明确使用 .first 或 .nth(index)。'
     if 'waiting for locator' in text or 'timeout' in text and ('locator' in text or 'selector' in text):
