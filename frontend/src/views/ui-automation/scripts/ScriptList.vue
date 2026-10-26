@@ -134,7 +134,7 @@
         </div>
         <div class="sync-editor-body">
           <div class="steps-pane">
-            <StructuredStepEditor v-model="editingSteps" :elements="editorElements" title="录制步骤" @change="onStepsChanged" />
+            <StructuredStepEditor v-model="editingSteps" :elements="editorElements" :storage-states="storageStates" title="录制步骤" @change="onStepsChanged" />
           </div>
           <div class="code-pane">
             <div class="pane-heading">生成的 Playwright 代码 <el-tag size="small" type="success">步骤 ↔ 代码同步</el-tag></div>
@@ -190,6 +190,7 @@ import {
   deleteTestScript,
   importRecordedScript,
   getElements,
+  getStorageStates,
   getScriptSteps,
   parseScriptSteps,
   saveScriptEditor,
@@ -232,6 +233,7 @@ const syncing = ref(false)
 const converting = ref(false)
 const editingSteps = ref([])
 const editorElements = ref([])
+const storageStates = ref([])
 const monacoHost = ref(null)
 const editorError = ref('')
 const syncState = ref('synced')
@@ -249,12 +251,12 @@ const normalizeAction = value => ({
   CHECK: 'check', UNCHECK: 'uncheck', HOVER: 'hover', GETTEXT: 'getText',
   GET_TEXT: 'getText', WAITFOR: 'waitFor', WAIT_FOR: 'waitFor', SCROLL: 'scroll', SCREENSHOT: 'screenshot',
   ASSERT: 'assert', VERIFY: 'assert', WAIT: 'wait', SWITCHTAB: 'switchTab',
-  SWITCH_TAB: 'switchTab', NAVIGATE: 'navigate'
+  SWITCH_TAB: 'switchTab', NAVIGATE: 'navigate', STORAGE_STATE: 'storageState', STORAGESTATE: 'storageState'
 }[String(value || '').replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()] || value)
 const actionLabel = value => ({
   click: '点击', fill: '输入文本', press: '按键', select: '选择选项', check: '勾选', uncheck: '取消勾选',
   getText: '获取文本', waitFor: '等待元素', hover: '悬停', scroll: '滚动', screenshot: '截图',
-  assert: '断言', wait: '等待', switchTab: '切换标签页', navigate: '跳转URL'
+  assert: '断言', wait: '等待', switchTab: '切换标签页', navigate: '跳转URL', storageState: '登录态'
 }[normalizeAction(value)] || value || '-')
 const getStepElementText = step => {
   const element = step.target_element
@@ -411,6 +413,8 @@ const editScript = async (script) => {
     ])
     let rawSteps = stepResponse.data.results || stepResponse.data
     editorElements.value = elementResponse.data.results || elementResponse.data
+    const storageResponse = await getStorageStates({ project: script.project?.id || selectedProject.value, page_size: 200 })
+    storageStates.value = storageResponse.data.results || storageResponse.data
     if (!rawSteps.length) {
       const parsed = await parseScriptSteps(script.id, script.content || '')
       rawSteps = parsed.data.steps.map((step, index) => ({
@@ -419,13 +423,25 @@ const editScript = async (script) => {
     }
     editingSteps.value = rawSteps.map(step => {
       const element = step.target_element
+      const actionType = normalizeAction(step.action_type)
+      const actionParams = { ...(step.action_params || {}) }
+      // 登录态动作复用手动用例的固定参数结构，兼容历史步骤中的空 action_params。
+      if (actionType === 'storageState') {
+        Object.assign(actionParams, {
+          operation: actionParams.operation || 'save',
+          mode: actionParams.mode || 'save_as',
+          name: actionParams.name || '',
+          storage_state_id: actionParams.storage_state_id || null
+        })
+      }
       const locator = element
         ? { strategy: element.locator_strategy?.name?.toLowerCase(), value: element.locator_value, options: element.locator_options || {} }
-        : (step.action_params?.locator || {})
+        : (actionParams.locator || {})
       const strategyName = locator.strategy || 'role'
       return {
         ...step,
-        action_type: normalizeAction(step.action_type),
+        action_type: actionType,
+        action_params: actionParams,
         id: step.id,
         element_id: element?.id || step.element_id || '',
         element_page: element?.page || '',
@@ -441,6 +457,34 @@ const editScript = async (script) => {
         expanded: true
       }
     })
+    // 历史版本可能已经保存了与代码不一致的步骤；打开时将代码标记为待反解析，保存前会以代码为准同步。
+    try {
+      const generated = await generateScriptCode(script.id, {
+        steps: editorStepPayload(), start_url: editingScript.value.start_url || ''
+      })
+      if (comparableCode(generated.data.content) !== comparableCode(editingScript.value.content)) {
+        const existingStorageStep = editingSteps.value.length === 1 && editingSteps.value[0].action_type === 'storageState'
+          ? editingSteps.value[0]
+          : null
+        const existingStorageName = existingStorageStep?.action_params?.operation === 'save'
+          ? String(existingStorageStep.action_params.name || '').trim()
+          : ''
+        // 已保存步骤与脚本内容来自不同版本时，以当前代码重新反解析，立即恢复两侧一致。
+        const parsed = await parseCode()
+        if (!parsed) {
+          syncState.value = 'code'
+        } else if (existingStorageName && existingStorageName !== 'storage_state') {
+          // 录制导出的默认文件名不应覆盖用户在手动步骤中填写的登录态名称。
+          const parsedStorageStep = editingSteps.value.find(step => step.action_type === 'storageState')
+          if (parsedStorageStep?.action_params?.operation === 'save' && parsedStorageStep.action_params.name === 'storage_state') {
+            parsedStorageStep.action_params.name = existingStorageName
+            await generateFromSteps()
+          }
+        }
+      }
+    } catch {
+      // 一致性检查失败不阻断编辑器打开，仍保留原有同步状态。
+    }
   } catch (error) {
     editorError.value = error.response?.data?.detail || '加载步骤或元素库失败'
   }
@@ -481,6 +525,9 @@ const onStepsChanged = () => {
   generateTimer = setTimeout(generateFromSteps, 400)
 }
 
+// 忽略换行和缩进差异，仅用于判断代码与结构化步骤是否来自同一份内容。
+const comparableCode = value => String(value || '').replace(/\s+/g, '').trim()
+
 // 将编辑器字段重新组装成后端 action_params 结构并保留定位选项。
 const editorStepPayload = () => editingSteps.value.map(step => ({
   ...step,
@@ -506,8 +553,10 @@ const generateFromSteps = async () => {
     })
     applyCode(response.data.content)
     syncState.value = 'synced'
+    return true
   } catch (error) {
     editorError.value = error.response?.data?.error || '代码生成失败'
+    return false
   } finally {
     syncing.value = false
   }
@@ -516,6 +565,10 @@ const generateFromSteps = async () => {
 // 将右侧手工修改的代码反解析，并映射回结构化步骤字段。
 const parseCode = async () => {
   if (!editingScript.value) return
+  if (generateTimer) {
+    clearTimeout(generateTimer)
+    generateTimer = null
+  }
   syncing.value = true
   editorError.value = ''
   try {
@@ -532,8 +585,10 @@ const parseCode = async () => {
     }))
     if (response.data.start_url) editingScript.value.start_url = response.data.start_url
     syncState.value = 'synced'
+    return true
   } catch (error) {
     editorError.value = error.response?.data?.error || '代码反解析失败'
+    return false
   } finally {
     syncing.value = false
   }
@@ -584,6 +639,15 @@ const saveEditedScript = async () => {
 
   try {
     saving.value = true
+
+    // 保存前确保左右两侧使用同一份内容，避免旧步骤覆盖用户刚修改的代码。
+    if (syncState.value === 'code') {
+      const parsed = await parseCode()
+      if (!parsed) return
+    } else if (syncState.value === 'steps') {
+      const generated = await generateFromSteps()
+      if (!generated) return
+    }
 
     const content = codeEditor?.getValue() || editingScript.value.content
     await saveScriptEditor(editingScript.value.id, {

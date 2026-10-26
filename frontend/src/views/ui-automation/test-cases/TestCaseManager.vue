@@ -54,7 +54,6 @@
             <div class="case-header">
               <div class="case-info">
                 <h4 class="case-name">{{ testCase.name }}</h4>
-                <p class="case-description">{{ testCase.description || t('uiAutomation.testCase.noDescription') }}</p>
               </div>
               <div class="case-actions">
                 <el-button size="small" text @click.stop="runTestCase(testCase)">
@@ -86,7 +85,8 @@
           <div class="right-panel">
         <div v-if="selectedTestCase" class="test-case-detail">
           <div class="detail-header">
-            <h3>{{ selectedTestCase.name }}</h3>
+            <h3 class="detail-title">{{ selectedTestCase.name }}</h3>
+            <p class="detail-description">{{ selectedTestCase.description || t('uiAutomation.testCase.noDescription') }}</p>
             <div class="detail-actions">
               <el-button size="small" @click="addStep">
                 <el-icon><Plus /></el-icon>
@@ -1391,24 +1391,26 @@ onMounted(async () => {
 
 .case-info {
   flex: 1;
+  min-width: 0;
 }
 
 .case-name {
   margin: 0 0 5px 0;
   font-size: 16px;
   font-weight: 600;
-}
-
-.case-description {
-  margin: 0;
-  color: #666;
-  font-size: 14px;
-  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .case-actions {
   display: flex;
-  gap: 5px;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.case-actions :deep(.el-button) {
+  width: 24px;
+  height: 24px;
+  padding: 0;
 }
 
 .case-meta {
@@ -1443,21 +1445,31 @@ onMounted(async () => {
 
 .detail-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   margin-bottom: 20px;
   padding-bottom: 15px;
   border-bottom: 1px solid #e6e6e6;
-  flex-wrap: wrap;
-  gap: 16px;
+  gap: 8px;
 }
 
-.detail-header h3 {
+.detail-title {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-description {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .detail-actions {
   display: flex;
+  justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;

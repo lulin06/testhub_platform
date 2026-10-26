@@ -80,6 +80,28 @@ def _canonical_locator_strategy(value):
     return LOCATOR_STRATEGY_NAMES.get(key, key)
 
 
+def _canonical_storage_state_params(value):
+    """复用手动用例的登录态动作 JSON 结构，避免同步编辑保存出多套格式。"""
+    params = dict(value or {})
+    operation = str(params.get('operation') or 'save').strip()
+    if operation == 'save':
+        return {
+            'operation': 'save',
+            'mode': params.get('mode') or 'save_as',
+            'name': str(params.get('name') or '').strip(),
+            'storage_state_id': params.get('storage_state_id') or None,
+        }
+    if operation == 'switch':
+        return {
+            'operation': 'switch',
+            'storage_state_id': params.get('storage_state_id') or None,
+        }
+    if operation == 'clear':
+        return {'operation': 'clear'}
+    # 让现有校验在未知操作时返回明确错误，同时保留原始参数便于排查。
+    return params
+
+
 def _page_name_from_url(value):
     """从起始 URL 的最后一路径推断元素所属页面名称。"""
     parsed = urlparse(str(value or ''))
@@ -365,9 +387,11 @@ class StorageStateViewSet(viewsets.ModelViewSet):
         if not isinstance(payload, dict) or not isinstance(payload.get('cookies', []), list) or not isinstance(payload.get('origins', []), list):
             raise ValidationError({'content': '登录态 JSON 必须包含 cookies 和 origins 数组'})
         raw = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
+        # FileField.delete() clears its in-memory name, so retain the filename first.
+        file_name = instance.file.name.rsplit('/', 1)[-1] if instance.file and instance.file.name else 'storage_state.json'
         if instance.file:
             instance.file.delete(save=False)
-        instance.file.save(instance.file.name.rsplit('/', 1)[-1] or 'storage_state.json', ContentFile(raw), save=False)
+        instance.file.save(file_name, ContentFile(raw), save=False)
         instance.file_size = len(raw)
         instance.save(update_fields=['file', 'file_size', 'updated_at'])
         return Response(self.get_serializer(instance).data)
@@ -918,12 +942,14 @@ class TestScriptViewSet(viewsets.ModelViewSet):
                             page_url, strategies
                         )
                     action = str(data.get('action_type') or '').strip()
+                    if action == 'storageState':
+                        params = _canonical_storage_state_params(params)
                     stored_action = {
                         'click': 'CLICK', 'fill': 'INPUT', 'press': 'PRESS', 'select': 'SELECT',
                         'check': 'CHECK', 'uncheck': 'UNCHECK', 'getText': 'GETTEXT',
                         'waitFor': 'WAITFOR', 'assert': 'VERIFY', 'wait': 'WAIT',
                         'hover': 'HOVER', 'scroll': 'SCROLL', 'navigate': 'NAVIGATE',
-                        'screenshot': 'SCREENSHOT', 'switchTab': 'SWITCH_TAB',
+                        'screenshot': 'SCREENSHOT', 'switchTab': 'SWITCH_TAB', 'storageState': 'STORAGE_STATE',
                     }.get(action, action.upper() or 'CUSTOM')
                     created_steps.append(ScriptStep(
                         script=script,
@@ -960,7 +986,7 @@ class TestScriptViewSet(viewsets.ModelViewSet):
         steps = list(script.steps.select_related('target_element').order_by('step_order'))
         if not steps:
             return Response({'error': '请先在编辑器中完成步骤同步并保存'}, status=status.HTTP_400_BAD_REQUEST)
-        action_map = {'CLICK': 'click', 'INPUT': 'fill', 'PRESS': 'press', 'HOVER': 'hover', 'WAIT': 'wait', 'WAITFOR': 'waitFor', 'NAVIGATE': 'navigate', 'SCREENSHOT': 'screenshot', 'VERIFY': 'assert', 'GETTEXT': 'getText', 'SELECT': 'select', 'CHECK': 'check', 'UNCHECK': 'uncheck', 'SCROLL': 'scroll', 'SWITCH_TAB': 'switchTab', 'CUSTOM': None}
+        action_map = {'CLICK': 'click', 'INPUT': 'fill', 'PRESS': 'press', 'HOVER': 'hover', 'WAIT': 'wait', 'WAITFOR': 'waitFor', 'NAVIGATE': 'navigate', 'SCREENSHOT': 'screenshot', 'VERIFY': 'assert', 'GETTEXT': 'getText', 'SELECT': 'select', 'CHECK': 'check', 'UNCHECK': 'uncheck', 'SCROLL': 'scroll', 'SWITCH_TAB': 'switchTab', 'STORAGE_STATE': 'storageState', 'CUSTOM': None}
         unsupported = [step.step_order for step in steps if action_map.get(step.action_type) is None]
         if unsupported:
             return Response({'error': f'步骤 {", ".join(map(str, unsupported))} 尚不能转换为可执行测试用例'}, status=status.HTTP_400_BAD_REQUEST)
@@ -987,12 +1013,17 @@ class TestScriptViewSet(viewsets.ModelViewSet):
                 action = action_map.get(step.action_type)
                 if action is None:
                     continue
+                action_params = step.action_params or {}
+                if action == 'storageState':
+                    action_params = _canonical_storage_state_params(action_params)
                 case_steps.append(TestCaseStep(
                     test_case=test_case,
                     step_number=index,
                     action_type=action,
                     element=step.target_element,
-                    input_value=step.input_value or (step.action_params or {}).get('select_value', ''),
+                    # 登录态动作沿用手动用例的 JSON 参数，不能在转换时丢失。
+                    action_params=action_params,
+                    input_value=step.input_value or action_params.get('select_value', ''),
                     wait_time=step.wait_time,
                     assert_type=step.assert_type,
                     assert_value=step.assert_value,

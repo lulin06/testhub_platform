@@ -397,6 +397,7 @@ class ScriptStep(models.Model):
         ('NAVIGATE', '导航'),
         ('SCREENSHOT', '截图'),
         ('SWITCH_TAB', '切换标签页'),
+        ('STORAGE_STATE', '登录态'),
         ('CUSTOM', '自定义'),
     ]
 

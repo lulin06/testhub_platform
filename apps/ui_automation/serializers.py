@@ -210,19 +210,42 @@ class ElementSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("元素分组必须属于当前项目")
         return value
 
+    @staticmethod
+    def _resolve_page_group(project, page):
+        """将元素页面名称解析为项目下的顶层元素分组。"""
+        page_name = str(page or '').strip()
+        if not page_name:
+            return None
+        group, _ = ElementGroup.objects.get_or_create(
+            project=project,
+            name=page_name,
+            parent_group=None,
+            defaults={'description': '由元素页面自动创建'},
+        )
+        return group
+
     def create(self, validated_data):
         # 处理外键字段
         project_id = validated_data.pop('project_id')
         locator_strategy_id = validated_data.pop('locator_strategy_id', None)
         group_id = validated_data.pop('group_id', None)
+        group_field_present = 'group_id' in self.initial_data
 
         validated_data['project'] = UiProject.objects.get(id=project_id)
 
         if locator_strategy_id:
             validated_data['locator_strategy'] = LocatorStrategy.objects.get(id=locator_strategy_id)
 
-        if group_id:
-            validated_data['group'] = ElementGroup.objects.get(id=group_id)
+        if group_field_present:
+            # 显式传入分组时尊重调用方，包括传 null 清除分组。
+            validated_data['group'] = (
+                ElementGroup.objects.get(id=group_id) if group_id else None
+            )
+        elif validated_data.get('page'):
+            # API 调用方通常只提交 page；保持页面字段与元素树分组一致。
+            validated_data['group'] = self._resolve_page_group(
+                validated_data['project'], validated_data['page']
+            )
 
         return super().create(validated_data)
 
@@ -231,6 +254,7 @@ class ElementSerializer(serializers.ModelSerializer):
         project_id = validated_data.pop('project_id', None)
         locator_strategy_id = validated_data.pop('locator_strategy_id', None)
         group_id = validated_data.pop('group_id', None)
+        group_field_present = 'group_id' in self.initial_data
 
         if project_id:
             validated_data['project'] = UiProject.objects.get(id=project_id)
@@ -238,11 +262,15 @@ class ElementSerializer(serializers.ModelSerializer):
         if locator_strategy_id:
             validated_data['locator_strategy'] = LocatorStrategy.objects.get(id=locator_strategy_id)
 
-        if group_id is not None:  # 允许设置为None来清除分组
-            if group_id:
-                validated_data['group'] = ElementGroup.objects.get(id=group_id)
-            else:
-                validated_data['group'] = None
+        if group_field_present:  # 允许设置为None来清除分组
+            validated_data['group'] = (
+                ElementGroup.objects.get(id=group_id) if group_id else None
+            )
+        elif not group_field_present and 'page' in validated_data:
+            # 修改页面时未显式传 group_id，自动移动到对应页面分组。
+            validated_data['group'] = self._resolve_page_group(
+                validated_data.get('project', instance.project), validated_data.get('page')
+            )
 
         return super().update(instance, validated_data)
 
