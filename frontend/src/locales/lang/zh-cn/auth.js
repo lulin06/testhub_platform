@@ -2,7 +2,7 @@ export default {
   // Login page
   welcomeBack: '欢迎回来',
   loginSubtitle: '登录以继续使用一站式智能化测试平台',
-  usernamePlaceholder: '请输入用户名',
+  usernamePlaceholder: '请输入用户名或邮箱',
   passwordPlaceholder: '请输入密码',
   phonePlaceholder: '请输入手机号',
   captchaPlaceholder: '图形验证码',
@@ -20,8 +20,8 @@ export default {
   loginFailed: '登录失败',
   networkError: '网络异常，请检查网络连接后重试',
   loginErrors: {
-    credentials_required: '请输入用户名和密码',
-    username_required: '请输入用户名',
+    credentials_required: '请输入用户名或邮箱和密码',
+    username_required: '请输入用户名或邮箱',
     password_required: '请输入密码',
     invalid_credentials: '用户名或密码错误',
     account_disabled: '用户已被禁用',
@@ -69,7 +69,7 @@ export default {
   scheduledTasks: '定时任务',
 
   // Validation messages
-  usernameRequired: '请输入用户名',
+  usernameRequired: '请输入用户名或邮箱',
   usernameLength: '用户名长度在 3 到 20 个字符',
   emailRequired: '请输入邮箱',
   emailFormat: '请输入正确的邮箱格式',

@@ -1062,8 +1062,13 @@ class TestExecutor:
                             step_result['error'] = log
                     elif step_data['assert_type'] == 'isVisible':
                         is_visible = target_locator.is_visible()
-                        step_result['success'] = is_visible
-                        if not is_visible:
+                        if (step_data.get('action_params') or {}).get('negate'):
+                            step_result['success'] = not is_visible
+                            if is_visible:
+                                step_result['error'] = f"✗ 断言失败: 元素 '{element_name}' 仍然可见"
+                        else:
+                            step_result['success'] = is_visible
+                        if not step_result['success'] and not step_result.get('error'):
                             step_result['error'] = f"✗ 断言失败: 元素 '{element_name}' 不可见"
                     elif step_data['assert_type'] == 'exists':
                         count = target_locator.count()

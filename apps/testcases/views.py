@@ -6,6 +6,7 @@ from rest_framework import filters
 from django.db import models
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
+from rest_framework import serializers
 
 from .models import TestCase, TestCaseStep, TestCaseAttachment, TestCaseComment, TestCaseImportRecord
 from .serializers import (
@@ -13,6 +14,7 @@ from .serializers import (
     TestCaseImportRecordListSerializer, TestCaseImportRecordDetailSerializer
 )
 from apps.projects.models import Project
+from apps.users.models import User
 from .services import TestCaseImportTemplateService, TestCaseExcelImportService
 from .tasks import import_testcases_from_excel
 
@@ -64,6 +66,9 @@ class TestCaseListCreateView(generics.ListCreateAPIView):
             project_ids = [int(pid) for pid in project_param.split(',') if pid.strip().isdigit()]
             if project_ids:
                 queryset = queryset.filter(project_id__in=project_ids)
+        maintainer_param = self.request.query_params.get('maintainer')
+        if maintainer_param and maintainer_param.isdigit():
+            queryset = queryset.filter(author_id=int(maintainer_param))
         return queryset
     
     def get_user_accessible_projects(self, user):
@@ -102,7 +107,16 @@ class TestCaseListCreateView(generics.ListCreateAPIView):
                     description='系统自动创建的默认项目'
                 )
         
-        serializer.save(author=user, project=project)
+        maintainer_id = serializer.validated_data.pop('maintainer_id', None)
+        maintainer = user
+        if maintainer_id:
+            from apps.projects.models import ProjectMember
+            if maintainer_id != project.owner_id and not ProjectMember.objects.filter(project=project, user_id=maintainer_id).exists():
+                raise serializers.ValidationError({'maintainer_id': '维护人必须是项目成员'})
+            maintainer = User.objects.filter(id=maintainer_id).first()
+            if not maintainer:
+                raise serializers.ValidationError({'maintainer_id': '维护人不存在'})
+        serializer.save(author=maintainer, project=project)
 
 class TestCaseDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = TestCase.objects.all()
@@ -132,18 +146,57 @@ class TestCaseDetailView(generics.RetrieveUpdateDestroyAPIView):
         user = self.request.user
         project_id = self.request.data.get('project_id')
         
+        maintainer_id = serializer.validated_data.pop('maintainer_id', None)
+        project = None
         if project_id:
             # 检查指定的项目是否存在且用户有权限
             accessible_projects = self.get_user_accessible_projects(user)
             try:
                 project = accessible_projects.get(id=project_id)
-                serializer.save(project=project)
             except Project.DoesNotExist:
-                # 如果指定项目不存在或无权限，保持原项目不变
-                serializer.save()
-        else:
-            # 没有指定项目，保持原项目不变
-            serializer.save()
+                raise serializers.ValidationError({'project_id': '项目不存在或无权访问'})
+        project = project or serializer.instance.project
+        save_kwargs = {}
+        if project_id and project is not None:
+            save_kwargs['project'] = project
+        if maintainer_id is not None:
+            from apps.projects.models import ProjectMember
+            if maintainer_id != project.owner_id and not ProjectMember.objects.filter(project=project, user_id=maintainer_id).exists():
+                raise serializers.ValidationError({'maintainer_id': '维护人必须是项目成员'})
+            maintainer = User.objects.filter(id=maintainer_id).first()
+            if not maintainer:
+                raise serializers.ValidationError({'maintainer_id': '维护人不存在'})
+            save_kwargs['author'] = maintainer
+        serializer.save(**save_kwargs)
+
+
+class TestCaseNotesImageUploadView(APIView):
+    """上传备注图片，备注正文只保存附件 URL，避免把图片 Base64 放进更新请求。"""
+
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, pk):
+        testcase = TestCase.objects.filter(
+            pk=pk,
+            project__in=get_user_accessible_projects(request.user),
+        ).first()
+        if not testcase:
+            return Response({'detail': '用例不存在或无权访问'}, status=status.HTTP_404_NOT_FOUND)
+
+        upload = request.FILES.get('file')
+        if not upload or upload.content_type not in {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}:
+            return Response({'detail': '只支持 PNG、JPEG、GIF 和 WebP 图片'}, status=status.HTTP_400_BAD_REQUEST)
+        if upload.size > 10 * 1024 * 1024:
+            return Response({'detail': '图片大小不能超过 10MB'}, status=status.HTTP_400_BAD_REQUEST)
+
+        attachment = TestCaseAttachment.objects.create(
+            testcase=testcase,
+            name=upload.name,
+            file=upload,
+            uploaded_by=request.user,
+        )
+        return Response({'url': attachment.file.url}, status=status.HTTP_201_CREATED)
 
 
 class TestCaseImportTemplateDownloadView(APIView):

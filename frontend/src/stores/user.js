@@ -94,43 +94,35 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
+  /* 短信登录暂时停用，保留原状态保存逻辑。
   const smsLogin = async (data) => {
-    try {
-      const response = await api.post('/auth/sms-login/', data)
+    const response = await api.post('/auth/sms-login/', data)
+    accessToken.value = response.data.access
+    refreshToken.value = response.data.refresh
+    user.value = response.data.user
 
-      accessToken.value = response.data.access
-      refreshToken.value = response.data.refresh
-      user.value = response.data.user
+    const expiresAt = Date.now() + 30 * 60 * 1000
+    tokenExpiresAt.value = expiresAt
+    localStorage.setItem('access_token', accessToken.value)
+    localStorage.setItem('refresh_token', refreshToken.value)
+    localStorage.setItem('token_expires_at', expiresAt.toString())
+    localStorage.setItem('user', JSON.stringify(user.value))
+    startAutoRefresh()
 
-      const expiresAt = Date.now() + 30 * 60 * 1000
-      tokenExpiresAt.value = expiresAt
-
-      localStorage.setItem('access_token', accessToken.value)
-      localStorage.setItem('refresh_token', refreshToken.value)
-      localStorage.setItem('token_expires_at', expiresAt.toString())
-      localStorage.setItem('user', JSON.stringify(user.value))
-
-      startAutoRefresh()
-
-      track('login_success', {
-        event_type: 'business',
-        module: 'auth',
-        page_path: '/login',
-        success: true,
-        metadata: {
-          login_type: 'sms'
-        }
-      })
-
-      return response.data
-    } catch (error) {
-      throw error
-    }
+    track('login_success', {
+      event_type: 'business',
+      module: 'auth',
+      page_path: '/login',
+      success: true,
+      metadata: { login_type: 'sms' }
+    })
+    return response.data
   }
+  */
 
   const register = async (userData) => {
     try {
-      const response = await api.post('/auth/test-register/', userData)
+      const response = await api.post('/auth/register/', userData)
 
       // 注册成功自动登录
       accessToken.value = response.data.access
@@ -306,7 +298,7 @@ export const useUserStore = defineStore('user', () => {
     isTokenExpiringSoon,
     isTokenExpired,
     login,
-    smsLogin,
+    // smsLogin,
     register,
     logout,
     refreshAccessToken,

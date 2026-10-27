@@ -975,6 +975,13 @@ class PlaywrightTestEngine:
 
                 elif step.assert_type == 'isVisible':
                     is_visible = await locator.is_visible()
+                    if (getattr(step, 'action_params', None) or {}).get('negate'):
+                        if not is_visible:
+                            return True, f"✓ 断言通过: 元素 '{element_name}' 不可见", None
+                        log = f"✗ 断言失败: 元素 '{element_name}' 仍然可见"
+                        screenshot = await self.page.screenshot()
+                        screenshot_base64 = f"data:image/png;base64,{base64.b64encode(screenshot).decode()}"
+                        return False, log, screenshot_base64
                     if is_visible:
                         log = f"✓ 断言通过: 元素 '{element_name}' 可见"
                         return True, log, None
@@ -1076,8 +1083,13 @@ class PlaywrightTestEngine:
             import platform
             is_linux = platform.system() == 'Linux'
 
-            # 使用 networkidle 等待页面加载完成
-            await self.page.goto(url, wait_until='networkidle', timeout=30000)
+            # 部分店铺页面持续发送分析/推送请求，networkidle 可能长期无法达到。
+            await self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            try:
+                await self.page.wait_for_load_state('networkidle', timeout=5000)
+                load_state = 'networkidle'
+            except PlaywrightTimeout:
+                load_state = 'domcontentloaded（networkidle 未达成）'
 
             # 额外等待，确保动态内容加载（Vue/React等SPA应用）
             # 服务器无头模式需要更长的等待时间
@@ -1085,7 +1097,7 @@ class PlaywrightTestEngine:
             await asyncio.sleep(extra_wait)
 
             log = f"✓ 成功导航到: {url}\n"
-            log += f"  - 等待页面加载完成（networkidle + 额外{extra_wait}秒）"
+            log += f"  - 等待页面加载完成（{load_state} + 额外{extra_wait}秒）"
             return True, log
         except Exception as e:
             log = f"✗ 导航失败: {url}\n  - 错误: {str(e)}"

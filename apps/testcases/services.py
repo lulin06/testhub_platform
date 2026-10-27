@@ -7,12 +7,13 @@ from io import BytesIO
 from typing import Dict, List, Optional
 
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import transaction, models
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from apps.users.models import User
+from apps.projects.models import Project
 from apps.versions.models import Version
 
 from .models import TestCase, TestCaseImportRecord
@@ -41,6 +42,8 @@ class TestCaseImportTemplateService:
         '优先级',
         '测试类型',
         '关联版本',
+        '关联项目',
+        '维护人',
     ]
 
     SAMPLE_ROW = [
@@ -51,6 +54,8 @@ class TestCaseImportTemplateService:
         '高',
         '功能测试',
         'V1.0,V1.1',
+        '',
+        '',
     ]
 
     INSTRUCTIONS = [
@@ -65,7 +70,8 @@ class TestCaseImportTemplateService:
         ['测试类型', '可选，支持中文或英文：功能测试/集成测试/API测试/UI测试/性能测试/安全测试 或 functional/integration/api/ui/performance/security；默认 functional(功能测试)'],
         ['中英文示例', '优先级示例：高 或 high；测试类型示例：功能测试 或 functional'],
         ['关联版本', '可选，填写当前项目下的版本名称，多个版本用英文逗号分隔'],
-        ['关联项目', '上传时由页面选择，不需要在 Excel 中填写'],
+        ['关联项目', '可选，填写已有项目名称；留空时使用导入窗口选择的项目'],
+        ['维护人', '可选，填写项目成员的用户名或邮箱；留空时使用导入操作人'],
     ]
 
     @classmethod
@@ -90,7 +96,7 @@ class TestCaseImportTemplateService:
             for cell in row:
                 cell.alignment = Alignment(vertical='top', wrap_text=True)
 
-        column_widths = [24, 24, 40, 34, 14, 18, 22]
+        column_widths = [24, 24, 40, 34, 14, 18, 22, 24, 24]
         for idx, width in enumerate(column_widths, start=1):
             worksheet.column_dimensions[chr(64 + idx)].width = width
 
@@ -142,6 +148,9 @@ class TestCaseExcelImportService:
         '优先级': 'priority',
         '测试类型': 'test_type',
         '关联版本': 'versions',
+        '关联项目': 'project',
+        '项目': 'project',
+        '维护人': 'maintainer',
     }
     EXPECTED_HEADER_FIELDS = [
         'title',
@@ -151,6 +160,8 @@ class TestCaseExcelImportService:
         'priority',
         'test_type',
         'versions',
+        'project',
+        'maintainer',
     ]
 
     @classmethod
@@ -175,10 +186,16 @@ class TestCaseExcelImportService:
         skip_count = 0
         failure_details: List[dict] = []
 
-        version_map = {
-            version.name: version
-            for version in Version.objects.filter(projects=record.project).distinct()
-        }
+        accessible_projects = Project.objects.filter(
+            models.Q(owner=record.created_by) | models.Q(members=record.created_by)
+        ).distinct()
+        projects_by_name = {}
+        ambiguous_project_names = set()
+        for project in accessible_projects:
+            if project.name in projects_by_name:
+                ambiguous_project_names.add(project.name)
+            else:
+                projects_by_name[project.name] = project
 
         for index, row in enumerate(effective_rows, start=2):
             row_values = list(row[:len(header_fields)])
@@ -187,7 +204,21 @@ class TestCaseExcelImportService:
                 for field, value in zip(header_fields, row_values)
             }
 
-            error_messages = cls._validate_row(row_data, version_map)
+            project_name = row_data.get('project')
+            project = projects_by_name.get(project_name) if project_name else record.project
+            error_messages = []
+            if project_name in ambiguous_project_names:
+                error_messages.append(f'项目名称不唯一，请先确保可访问项目名称唯一: {project_name}')
+            if project is None:
+                error_messages.append(f'项目不存在或无权访问: {project_name}')
+            version_map = {
+                version.name: version
+                for version in Version.objects.filter(projects=project).distinct()
+            } if project else {}
+            error_messages.extend(cls._validate_row(row_data, version_map))
+            maintainer = cls._get_project_maintainer(project, row_data.get('maintainer')) if project else None
+            if row_data.get('maintainer') and maintainer is None:
+                error_messages.append(f"维护人不是项目成员或用户名/邮箱不存在: {row_data['maintainer']}")
             if error_messages:
                 failed_count += 1
                 failure_details.append({
@@ -201,7 +232,7 @@ class TestCaseExcelImportService:
 
             with transaction.atomic():
                 testcase = TestCase.objects.create(
-                    project=record.project,
+                    project=project,
                     title=row_data['title'],
                     description='',
                     preconditions=row_data.get('preconditions', ''),
@@ -211,7 +242,7 @@ class TestCaseExcelImportService:
                     status='draft',
                     test_type=cls.TEST_TYPE_MAP.get(row_data.get('test_type', '').lower(), 'functional'),
                     tags=[],
-                    author=record.created_by,
+                    author=maintainer or record.created_by,
                     assignee=None,
                 )
                 if version_names:
@@ -286,10 +317,18 @@ class TestCaseExcelImportService:
         return errors
 
     @staticmethod
-    def _get_assignee(username: str) -> Optional[User]:
-        if not username:
+    def _get_project_maintainer(project: Project, identity: str) -> Optional[User]:
+        if not identity:
             return None
-        return User.objects.filter(username=username).first()
+        member = project.members.filter(
+            models.Q(username__iexact=identity) | models.Q(email__iexact=identity)
+        ).first()
+        if member:
+            return member
+        owner = project.owner
+        if owner.username.lower() == identity.lower() or (owner.email and owner.email.lower() == identity.lower()):
+            return owner
+        return None
 
     @staticmethod
     def _split_csv(text: str) -> List[str]:

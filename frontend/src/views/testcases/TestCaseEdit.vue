@@ -19,6 +19,12 @@
           />
         </el-form-item>
 
+        <el-form-item :label="$t('testcase.maintainer')">
+          <el-select v-model="form.maintainer_id" filterable :placeholder="$t('testcase.maintainer')">
+            <el-option v-for="member in projectMembers" :key="member.id" :label="member.email ? `${member.username} (${member.email})` : member.username" :value="member.id" />
+          </el-select>
+        </el-form-item>
+
         <el-row :gutter="20">
           <el-col :span="8">
             <el-form-item :label="$t('testcase.project')" prop="project_id">
@@ -113,6 +119,14 @@
           />
         </el-form-item>
 
+        <el-form-item :label="$t('testcase.notes')">
+          <RichTextEditor
+            ref="notesEditor"
+            v-model="form.notes"
+            :upload-url="`/testcases/${route.params.id}/notes-image/`"
+          />
+        </el-form-item>
+
         <el-form-item>
           <el-button type="primary" @click="handleSubmit" :loading="submitting">
             {{ $t('testcase.saveChanges') }}
@@ -125,6 +139,7 @@
     <div class="card-container" v-else>
       <el-skeleton :rows="10" animated />
     </div>
+
   </div>
 </template>
 
@@ -134,6 +149,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import api from '@/utils/api'
+import RichTextEditor from '@/components/RichTextEditor.vue'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -143,6 +159,8 @@ const loading = ref(true)
 const submitting = ref(false)
 const projects = ref([])
 const projectVersions = ref([])
+const projectMembers = ref([])
+const notesEditor = ref()
 
 const form = reactive({
   title: '',
@@ -153,7 +171,9 @@ const form = reactive({
   preconditions: '',
   steps: '',
   expected_result: '',
-  version_ids: []
+  version_ids: [],
+  notes: '',
+  maintainer_id: null
 })
 
 const rules = {
@@ -208,7 +228,20 @@ const fetchProjectVersions = async (projectId) => {
 
 const onProjectChange = (projectId) => {
   form.version_ids = []
+  form.maintainer_id = null
   fetchProjectVersions(projectId)
+  fetchProjectMembers(projectId)
+}
+
+const fetchProjectMembers = async (projectId) => {
+  projectMembers.value = []
+  if (!projectId) return
+  try {
+    const response = await api.get(`/projects/${projectId}/members/`)
+    projectMembers.value = response.data || []
+  } catch (error) {
+    console.error('Fetch project members failed:', error)
+  }
 }
 
 const onVersionChange = () => {
@@ -223,6 +256,8 @@ const fetchTestCase = async () => {
     // Fill form data
     form.title = testcase.title
     form.description = testcase.description
+    form.notes = testcase.notes || ''
+    form.maintainer_id = testcase.author?.id || null
     form.project_id = testcase.project?.id || null
     form.priority = testcase.priority
     form.test_type = testcase.test_type
@@ -238,6 +273,7 @@ const fetchTestCase = async () => {
     // If project exists, fetch versions for that project
     if (form.project_id) {
       await fetchProjectVersions(form.project_id)
+      await fetchProjectMembers(form.project_id)
     }
 
     loading.value = false
@@ -257,6 +293,7 @@ const handleSubmit = async () => {
         // Convert newlines back to <br> tags before submitting
         const submitData = {
           ...form,
+          notes: await notesEditor.value.uploadEmbeddedImages(form.notes),
           preconditions: convertNewlineToBr(form.preconditions || ''),
           steps: convertNewlineToBr(form.steps || ''),
           expected_result: convertNewlineToBr(form.expected_result || '')
