@@ -78,6 +78,7 @@ export default {
   selectAssignees: 'Select assignees',
   commentsPlaceholder: 'Enter comments',
   testcaseSelectorTitle: 'Select Test Cases',
+  testcaseLibrary: 'Case Library',
   testcaseKeyword: 'Keyword',
   testcaseKeywordPlaceholder: 'Search by title',
   testcasePriority: 'Priority',

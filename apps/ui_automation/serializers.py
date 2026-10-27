@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db.models import Q
 from django.utils import timezone
 from .models import (
     UiProject, StorageState, LocatorStrategy, Element, TestScript, TestSuite,
@@ -680,6 +681,9 @@ class CodeGenerationSerializer(serializers.Serializer):
 
 class TestCaseStepSerializer(serializers.ModelSerializer):
     """测试用例步骤序列化器"""
+    test_case = serializers.PrimaryKeyRelatedField(
+        queryset=TestCase.objects.none(), required=False, write_only=True
+    )
     # 除元素主键外，同时返回定位信息，供步骤编辑器直接回显。
     element_name = serializers.CharField(source='element.name', read_only=True)
     element_page = serializers.CharField(source='element.page', read_only=True)
@@ -690,7 +694,7 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestCaseStep
         fields = [
-            'id', 'step_number', 'action_type', 'element', 'element_name', 'element_page', 'element_locator',
+            'id', 'test_case', 'step_number', 'action_type', 'element', 'element_name', 'element_page', 'element_locator',
             'element_locator_strategy', 'element_locator_options',
             'input_value', 'action_params', 'wait_time', 'assert_type', 'assert_value', 'description', 'created_at'
         ]
@@ -699,6 +703,17 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
                 'help_text': 'hasAttribute 使用属性名或“属性名=期望值”，例如 href 或 href=https://example.com。',
             },
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            accessible_projects = UiProject.objects.filter(
+                Q(owner=request.user) | Q(members=request.user)
+            ).distinct()
+            self.fields['test_case'].queryset = TestCase.objects.filter(
+                project__in=accessible_projects
+            )
 
     def get_element_locator_strategy(self, obj):
         """返回元素关联的定位策略名称。"""
@@ -715,7 +730,8 @@ class TestCaseStepSerializer(serializers.ModelSerializer):
         action_type = attrs.get('action_type', getattr(self.instance, 'action_type', None))
         assert_type = attrs.get('assert_type', getattr(self.instance, 'assert_type', ''))
         element = attrs.get('element', getattr(self.instance, 'element', None))
-        project_id = getattr(getattr(self.instance, 'test_case', None), 'project_id', None)
+        test_case = attrs.get('test_case', getattr(self.instance, 'test_case', None))
+        project_id = getattr(test_case, 'project_id', None)
 
         action_params = attrs.get('action_params', getattr(self.instance, 'action_params', {})) or {}
         if action_type == 'storageState' and not action_params:

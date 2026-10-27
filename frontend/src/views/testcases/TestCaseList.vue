@@ -3,6 +3,9 @@
     <div class="page-header">
       <h1 class="page-title">{{ $t('testcase.title') }}</h1>
       <div class="header-actions">
+        <el-button v-if="selectedTestCases.length > 0" @click="openMoveDialog">
+          <el-icon><FolderOpened /></el-icon>{{ $t('testcase.moveCases') }} ({{ selectedTestCases.length }})
+        </el-button>
         <el-button
           v-if="selectedTestCases.length > 0"
           type="danger"
@@ -33,7 +36,70 @@
       </div>
     </div>
     
-    <div class="card-container">
+    <ResizableSplitPane v-model="sidebarWidth" :min-size="220" :max-size="420" :second-min-size="500" storage-key="testcase-module-sidebar-width">
+      <template #first>
+        <aside class="module-sidebar">
+          <div class="sidebar-header">
+            <el-select v-model="moduleProjectId" clearable filterable :placeholder="$t('testcase.relatedProject')" @change="handleModuleProjectChange">
+              <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+            </el-select>
+            <div class="sidebar-title-row">
+              <el-input
+                v-model="moduleSearch"
+                size="small"
+                clearable
+                :placeholder="$t('testcase.searchModules')"
+              >
+                <template #prefix><el-icon><Search /></el-icon></template>
+              </el-input>
+              <el-tooltip :content="$t('testcase.createModule')" placement="top">
+                <el-button type="success" size="small" :disabled="!moduleProjectId" @click="openModuleDialog()"><el-icon><Plus /></el-icon></el-button>
+              </el-tooltip>
+            </div>
+          </div>
+          <div class="collection-tree">
+            <div class="tree-entry" :class="{ active: selectedModule === '' }" @click="selectModule('')">
+              <span class="tree-entry-label">{{ $t('testcase.allCases') }}</span><span class="tree-count">{{ allProjectCount }}</span>
+            </div>
+            <el-tree
+              v-if="moduleProjectId"
+              :data="filteredModuleTree"
+              :props="{ label: 'name', children: 'children' }"
+              node-key="id"
+              default-expand-all
+              highlight-current
+              :expand-on-click-node="false"
+              @node-click="node => selectModule(String(node.id))"
+            >
+              <template #default="{ node, data }">
+                <div class="tree-node" :class="{ 'is-active': selectedModule === String(data.id) }">
+                  <el-icon><Folder /></el-icon>
+                  <span class="node-label" :title="node.label">{{ node.label }}</span>
+                  <div class="node-actions" @click.stop>
+                    <el-dropdown trigger="click" @command="command => handleModuleCommand(command, data)">
+                      <el-button link size="small" :icon="MoreFilled" :title="$t('testcase.modules')" />
+                      <template #dropdown><el-dropdown-menu>
+                        <el-dropdown-item command="child">{{ $t('testcase.addSubmodule') }}</el-dropdown-item>
+                        <el-dropdown-item command="move">{{ $t('testcase.moveModule') }}</el-dropdown-item>
+                        <el-dropdown-item command="rename">{{ $t('common.edit') }}</el-dropdown-item>
+                        <el-dropdown-item command="delete" divided>{{ $t('common.delete') }}</el-dropdown-item>
+                      </el-dropdown-menu></template>
+                    </el-dropdown>
+                  </div>
+                  <span class="tree-count">{{ data.count }}</span>
+                </div>
+              </template>
+            </el-tree>
+            <el-empty v-else :description="$t('testcase.selectProjectForModules')" :image-size="60" />
+            <el-empty v-if="moduleProjectId && moduleSearch.trim() && !filteredModuleTree.length" :description="$t('testcase.noModulesFound')" :image-size="60" />
+            <div v-if="moduleProjectId" class="tree-entry root-module-level" :class="{ active: selectedModule === 'none' }" @click="selectModule('none')">
+              <el-icon><FolderOpened /></el-icon><span class="tree-entry-label">{{ $t('testcase.noModule') }}</span><span class="tree-count">{{ unassignedCount }}</span>
+            </div>
+          </div>
+        </aside>
+      </template>
+      <template #second>
+      <section class="card-container">
       <div class="filter-bar">
         <el-row :gutter="20">
           <el-col :span="5">
@@ -77,6 +143,7 @@
             </el-select>
           </el-col>
         </el-row>
+        <el-checkbox v-if="selectedModule && selectedModule !== 'none'" v-model="includeChildModules" @change="handleFilter">{{ $t('testcase.includeSubmodules') }}</el-checkbox>
       </div>
       
       <div class="table-container">
@@ -157,7 +224,19 @@
           @size-change="handleSizeChange"
         />
       </div>
-    </div>
+      </section>
+      </template>
+    </ResizableSplitPane>
+
+    <el-dialog v-model="moduleDialogVisible" :title="moduleEditing ? $t('testcase.renameModule') : $t('testcase.createModule')" width="420px">
+      <el-form label-width="90px"><el-form-item :label="$t('testcase.moduleName')"><el-input v-model="moduleForm.name" maxlength="100" /></el-form-item></el-form>
+      <template #footer><el-button @click="moduleDialogVisible = false">{{ $t('common.cancel') }}</el-button><el-button type="primary" @click="saveModule">{{ $t('common.confirm') }}</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="moveDialogVisible" :title="movingModule ? $t('testcase.moveModule') : $t('testcase.moveCases')" width="460px">
+      <el-form label-width="100px"><el-form-item :label="$t('testcase.targetModule')"><el-tree-select v-model="moveTargetModule" :data="moveModuleOptions" node-key="id" check-strictly default-expand-all :render-after-expand="false" style="width: 100%" :placeholder="$t('testcase.selectTargetModule')" /></el-form-item></el-form>
+      <template #footer><el-button @click="moveDialogVisible = false">{{ $t('common.cancel') }}</el-button><el-button type="primary" :loading="isMoving" @click="confirmMove">{{ movingModule ? $t('testcase.moveModule') : $t('testcase.moveCases') }}</el-button></template>
+    </el-dialog>
 
     <el-dialog
       v-model="importDialogVisible"
@@ -227,11 +306,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Download, Delete, Upload } from '@element-plus/icons-vue'
+import { Plus, Search, Download, Delete, Upload, Folder, FolderOpened, MoreFilled } from '@element-plus/icons-vue'
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import api from '@/utils/api'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
@@ -239,6 +319,33 @@ import * as XLSX from 'xlsx'
 const { t } = useI18n()
 const router = useRouter()
 const loading = ref(false)
+const sidebarWidth = ref(280)
+const moduleTree = ref([])
+const moduleProjectId = ref('')
+const moduleSearch = ref('')
+const selectedModule = ref('')
+const includeChildModules = ref(true)
+const allProjectCount = ref(0)
+const unassignedCount = ref(0)
+const moduleDialogVisible = ref(false)
+const moduleEditing = ref(false)
+const moduleForm = ref({ name: '', id: null, parentId: null })
+const moveDialogVisible = ref(false)
+const moveTargetModule = ref(null)
+const isMoving = ref(false)
+const movingModule = ref(null)
+const filteredModuleTree = computed(() => {
+  const keyword = moduleSearch.value.trim().toLocaleLowerCase()
+  if (!keyword) return moduleTree.value
+  const filterNodes = (nodes) => nodes.reduce((matches, node) => {
+    const children = filterNodes(node.children || [])
+    if (node.name.toLocaleLowerCase().includes(keyword) || children.length) {
+      matches.push({ ...node, children })
+    }
+    return matches
+  }, [])
+  return filterNodes(moduleTree.value)
+})
 const testcases = ref([])
 const projects = ref([])
 const maintainers = ref([])
@@ -269,6 +376,10 @@ const fetchTestCases = async () => {
       priority: priorityFilter.value,
       maintainer: maintainerFilter.value
     }
+    if (selectedModule.value) {
+      params.module = selectedModule.value
+      if (includeChildModules.value && selectedModule.value !== 'none') params.include_children = 'true'
+    }
     const response = await api.get('/testcases/', { params })
     testcases.value = response.data.results || []
     total.value = response.data.count || 0
@@ -287,6 +398,71 @@ const handleSearch = () => {
 const handleFilter = () => {
   currentPage.value = 1
   fetchTestCases()
+}
+
+const moveModuleOptions = computed(() => {
+  const addLabels = (nodes) => nodes.map(node => ({ ...node, label: node.name, children: addLabels(node.children || []) }))
+  return [{ id: '__root__', label: t('testcase.noParentModule'), children: addLabels(moduleTree.value) }]
+})
+const loadModuleTree = async () => {
+  if (!moduleProjectId.value) { moduleTree.value = []; return }
+  try {
+    const { data } = await api.get('/testcases/modules/', { params: { project: moduleProjectId.value } })
+    moduleTree.value = data
+    const [allCases, unassigned] = await Promise.all([
+      api.get('/testcases/', { params: { project: moduleProjectId.value, page_size: 1 } }),
+      api.get('/testcases/', { params: { project: moduleProjectId.value, module: 'none', page_size: 1 } })
+    ])
+    allProjectCount.value = allCases.data.count || 0
+    unassignedCount.value = unassigned.data.count || 0
+  } catch (error) { ElMessage.error(t('testcase.fetchModulesFailed')) }
+}
+const handleModuleProjectChange = () => {
+  selectedModule.value = ''
+  projectFilter.value = moduleProjectId.value || ''
+  if (!moduleProjectId.value) { allProjectCount.value = 0; unassignedCount.value = 0 }
+  loadModuleTree()
+  handleFilter()
+}
+const selectModule = (id) => { selectedModule.value = id; projectFilter.value = moduleProjectId.value || ''; handleFilter() }
+const openModuleDialog = (parent = null) => {
+  moduleEditing.value = Boolean(parent?.id && parent?.rename)
+  moduleForm.value = { name: moduleEditing.value ? parent.name : '', id: moduleEditing.value ? parent.id : null, parentId: parent?.id || null }
+  moduleDialogVisible.value = true
+}
+const handleModuleCommand = async (command, module) => {
+  if (command === 'child') return openModuleDialog(module)
+  if (command === 'rename') return openModuleDialog({ ...module, rename: true })
+  if (command === 'move') { movingModule.value = module; moveTargetModule.value = module.parent_id || '__root__'; moveDialogVisible.value = true; return }
+  if (command === 'delete') {
+    try { await ElMessageBox.confirm(t('testcase.deleteModuleConfirm'), t('common.warning')); await api.delete(`/testcases/modules/${module.id}/`); await loadModuleTree() }
+    catch (error) { if (error !== 'cancel') ElMessage.error(error.response?.data?.detail || t('testcase.moduleDeleteFailed')) }
+  }
+}
+const saveModule = async () => {
+  try {
+    if (moduleEditing.value) await api.patch(`/testcases/modules/${moduleForm.value.id}/`, { name: moduleForm.value.name })
+    else await api.post('/testcases/modules/', { project_id: moduleProjectId.value, parent_id: moduleForm.value.parentId, name: moduleForm.value.name })
+    moduleDialogVisible.value = false; await loadModuleTree(); ElMessage.success(t('testcase.moduleSaved'))
+  } catch (error) { ElMessage.error(error.response?.data?.name || error.response?.data?.parent_id || t('testcase.moduleSaveFailed')) }
+}
+const openMoveDialog = () => {
+  const projectsSelected = new Set(selectedTestCases.value.map(item => item.project?.id))
+  if (projectsSelected.size !== 1) { ElMessage.warning(t('testcase.moveSameProject')); return }
+  movingModule.value = null; moduleProjectId.value = [...projectsSelected][0]; loadModuleTree(); moveTargetModule.value = null; moveDialogVisible.value = true
+}
+const confirmMove = () => movingModule.value ? moveSelectedModule() : moveSelectedCases()
+const moveSelectedModule = async () => {
+  isMoving.value = true
+  try { await api.put(`/testcases/modules/${movingModule.value.id}/`, { parent_id: moveTargetModule.value === '__root__' ? null : moveTargetModule.value }); movingModule.value = null; moveDialogVisible.value = false; await loadModuleTree(); ElMessage.success(t('testcase.moduleMoved')) }
+  catch (error) { ElMessage.error(error.response?.data?.parent_id || error.response?.data?.name || t('testcase.moveFailed')) }
+  finally { isMoving.value = false }
+}
+const moveSelectedCases = async () => {
+  isMoving.value = true
+  try { await api.post('/testcases/move/', { testcase_ids: selectedTestCases.value.map(item => item.id), module_id: moveTargetModule.value === '__root__' ? null : moveTargetModule.value }); moveDialogVisible.value = false; selectedTestCases.value = []; await loadModuleTree(); await fetchTestCases(); ElMessage.success(t('testcase.casesMoved')) }
+  catch (error) { ElMessage.error(error.response?.data?.detail || t('testcase.moveFailed')) }
+  finally { isMoving.value = false }
 }
 
 const handlePageChange = () => {
@@ -453,7 +629,8 @@ const exportToExcel = async () => {
             search: searchText.value,
             project: projectFilter.value,
             priority: priorityFilter.value,
-            maintainer: maintainerFilter.value
+            maintainer: maintainerFilter.value,
+            ...(selectedModule.value ? { module: selectedModule.value, ...(includeChildModules.value && selectedModule.value !== 'none' ? { include_children: 'true' } : {}) } : {})
           }
         })
 
@@ -585,7 +762,7 @@ const downloadImportTemplate = async () => {
     const response = await api.get('/testcases/import/template/', {
       responseType: 'blob'
     })
-    downloadBlob(response.data, 'testcase_import_template_v1.xlsx')
+    downloadBlob(response.data, 'testcase_import_template_v2.xlsx')
     ElMessage.success(t('testcase.downloadTemplateSuccess'))
   } catch (error) {
     console.error('Download import template failed:', error)
@@ -675,6 +852,8 @@ const fetchMaintainers = async () => {
 
 onMounted(async () => {
   await fetchProjects()
+  moduleProjectId.value = projectFilter.value || (projects.value[0]?.id ?? '')
+  await loadModuleTree()
   await fetchMaintainers()
   fetchTestCases()
 })
@@ -684,8 +863,9 @@ onMounted(async () => {
 .page-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  padding: 20px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -694,7 +874,7 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   flex-shrink: 0;
 }
 
@@ -715,12 +895,35 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
 }
 
+.resizable-split-pane { flex: 1; min-height: 0; }
+.module-sidebar { width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid #e4e7ed; background: #fff; box-shadow: 2px 0 6px rgba(0, 0, 0, 0.05); }
+.sidebar-header { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-bottom: 1px solid #e4e7ed; background: #f8f9fa; }
+.sidebar-title-row { display: flex; align-items: center; gap: 8px; }
+.sidebar-title-row .el-input { flex: 1; min-width: 0; }
+.sidebar-title-row .el-button { flex: 0 0 36px; width: 36px; }
+.collection-tree { flex: 1; min-width: 0; overflow: auto; padding: 10px; }
+.collection-tree :deep(.el-tree-node__content) { min-width: 0; overflow: hidden; }
+.collection-tree :deep(.el-tree-node__content > .el-tree-node__label) { display: none; }
+.tree-node { position: relative; display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow: hidden; padding: 4px 0; }
+.tree-node > .el-icon { flex-shrink: 0; color: #606266; font-size: 16px; }
+.node-label { flex: 1; min-width: 0; overflow: hidden; padding-right: 32px; color: #303133; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; transition: color 0.2s; }
+.tree-node:hover .node-label, .tree-node.is-active .node-label { color: #409eff; }
+.node-actions { position: absolute; right: 26px; display: none; flex-shrink: 0; align-items: center; gap: 2px; }
+.tree-node:hover .node-actions { display: flex; }
+.node-actions .el-button { padding: 2px; color: #909399; }
+.node-actions .el-button:hover { color: #409eff; }
+.tree-entry { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 8px; border-radius: 3px; cursor: pointer; color: #303133; }
+.tree-entry.root-module-level { padding-left: 24px; }
+.tree-entry:hover, .tree-entry.active { color: #409eff; background: #ecf5ff; }
+.tree-entry-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-count { position: absolute; right: 8px; flex-shrink: 0; color: #909399; font-size: 12px; text-align: right; }
 .filter-bar {
   padding: 20px;
   border-bottom: 1px solid #ebeef5;
@@ -742,8 +945,7 @@ onMounted(async () => {
 }
 
 .pagination-container {
-  padding: 20px;
-  border-top: 1px solid #ebeef5;
+  margin-top: 20px;
   display: flex;
   justify-content: center;
   flex-shrink: 0;
@@ -786,26 +988,16 @@ onMounted(async () => {
 }
 
 @media (max-width: 1200px) {
-  .page-container {
-    height: auto;
-    min-height: 100vh;
-    overflow-y: auto;
-  }
-  
   .card-container {
-    min-height: 600px;
+    min-height: 0;
   }
   
   .table-container {
-    min-height: 400px;
+    min-height: 0;
   }
 }
 
 @media (max-width: 768px) {
-  .page-container {
-    padding: 10px;
-  }
-  
   .page-header {
     flex-direction: column;
     align-items: flex-start;
@@ -820,9 +1012,6 @@ onMounted(async () => {
     padding: 15px;
   }
   
-  .pagination-container {
-    padding: 15px;
-  }
 }
 
 .step-content {

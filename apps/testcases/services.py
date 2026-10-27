@@ -16,10 +16,10 @@ from apps.users.models import User
 from apps.projects.models import Project
 from apps.versions.models import Version
 
-from .models import TestCase, TestCaseImportRecord
+from .models import TestCase, TestCaseModule, TestCaseImportRecord
 
 
-TEMPLATE_VERSION = 'v1'
+TEMPLATE_VERSION = 'v2'
 TEMPLATE_SHEET_NAME = '用例导入模板'
 INSTRUCTION_SHEET_NAME = '填写说明'
 
@@ -35,42 +35,27 @@ class ImportSummary:
 
 class TestCaseImportTemplateService:
     HEADERS = [
-        '用例标题*',
-        '前置条件',
-        '操作步骤*',
-        '预期结果*',
-        '优先级',
-        '测试类型',
-        '关联版本',
-        '关联项目',
-        '维护人',
+        *[f'{level}级模块' for level in ('一', '二', '三')],
+        '用例名称', '优先级', '测试类型', '前置条件', '步骤描述', '预期结果', '备注', '维护人',
     ]
 
     SAMPLE_ROW = [
-        '用户登录成功校验',
-        '用户已注册且账号状态正常',
-        '1. 打开登录页\n2. 输入正确用户名和密码\n3. 点击登录按钮',
-        '页面跳转到首页，并显示登录成功信息',
-        '高',
-        '功能测试',
-        'V1.0,V1.1',
-        '',
-        '',
+        *([''] * 3), '用户登录成功校验', '高', '功能测试', '用户已注册且账号状态正常',
+        '1. 打开登录页\n2. 输入正确用户名和密码\n3. 点击登录按钮', '页面跳转到首页，并显示登录成功信息', '', '',
     ]
 
     INSTRUCTIONS = [
         ['模板版本', TEMPLATE_VERSION],
-        ['说明', '请勿修改表头名称，按模板字段填写并上传'],
+        ['说明', '请勿修改现有表头名称，按模板字段填写并上传；默认提供三级模块列。如需更深层级，可按“4级模块”至“8级模块”自行新增列，并连续填写父级路径'],
         ['默认处理', '模板中未提供的字段将使用系统默认值：描述为空、状态=draft(草稿)、标签=[]、指派人为空'],
-        ['用例标题*', '必填，测试用例标题，建议唯一且明确'],
+        ['用例名称', '必填，测试用例名称，建议唯一且明确'],
         ['前置条件', '可选'],
-        ['操作步骤*', '必填，支持多行文本'],
-        ['预期结果*', '必填，支持多行文本'],
+        ['步骤描述', '必填，支持多行文本'],
+        ['预期结果', '必填，支持多行文本'],
+        ['一级模块至三级模块', '可选，逐级填写模块名称；全部留空时用例归入无所属模块。需要更深层级时，可自行新增“4级模块”至“8级模块”列，不能跳级填写'],
         ['优先级', '可选，支持中文或英文：低/中/高/紧急 或 low/medium/high/critical；默认 medium(中)'],
         ['测试类型', '可选，支持中文或英文：功能测试/集成测试/API测试/UI测试/性能测试/安全测试 或 functional/integration/api/ui/performance/security；默认 functional(功能测试)'],
         ['中英文示例', '优先级示例：高 或 high；测试类型示例：功能测试 或 functional'],
-        ['关联版本', '可选，填写当前项目下的版本名称，多个版本用英文逗号分隔'],
-        ['关联项目', '可选，填写已有项目名称；留空时使用导入窗口选择的项目'],
         ['维护人', '可选，填写项目成员的用户名或邮箱；留空时使用导入操作人'],
     ]
 
@@ -96,7 +81,7 @@ class TestCaseImportTemplateService:
             for cell in row:
                 cell.alignment = Alignment(vertical='top', wrap_text=True)
 
-        column_widths = [24, 24, 40, 34, 14, 18, 22, 24, 24]
+        column_widths = [18] * 3 + [28, 14, 18, 34, 40, 34, 30, 24]
         for idx, width in enumerate(column_widths, start=1):
             worksheet.column_dimensions[chr(64 + idx)].width = width
 
@@ -140,27 +125,30 @@ class TestCaseExcelImportService:
     }
 
     HEADER_ALIASES = {
+        '用例名称': 'title',
         '用例标题*': 'title',
         '标题*': 'title',
         '前置条件': 'preconditions',
+        '步骤描述': 'steps',
         '操作步骤*': 'steps',
+        '预期结果': 'expected_result',
         '预期结果*': 'expected_result',
+        '备注': 'notes',
         '优先级': 'priority',
         '测试类型': 'test_type',
-        '关联版本': 'versions',
         '关联项目': 'project',
         '项目': 'project',
         '维护人': 'maintainer',
+        **{f'{level}级模块': f'module_{index}' for index, level in enumerate(('一', '二', '三', '四', '五', '六', '七', '八'), start=1)},
     }
     EXPECTED_HEADER_FIELDS = [
         'title',
+        'priority',
+        'test_type',
         'preconditions',
         'steps',
         'expected_result',
-        'priority',
-        'test_type',
-        'versions',
-        'project',
+        'notes',
         'maintainer',
     ]
 
@@ -174,8 +162,9 @@ class TestCaseExcelImportService:
         raw_headers = [cls._normalize_header(cell.value) for cell in next(worksheet.iter_rows(min_row=1, max_row=1))]
         effective_headers = [header for header in raw_headers if header]
         header_fields = [cls.HEADER_ALIASES.get(header) for header in effective_headers]
-
-        if None in header_fields or header_fields != cls.EXPECTED_HEADER_FIELDS:
+        base_fields = [field for field in header_fields if not (field or '').startswith('module_')]
+        module_fields = [field for field in header_fields if (field or '').startswith('module_')]
+        if None in header_fields or base_fields != cls.EXPECTED_HEADER_FIELDS or module_fields != [f'module_{i}' for i in range(1, len(module_fields) + 1)]:
             raise ValueError('导入模板表头不匹配，请先下载最新模板后再导入')
 
         rows = list(worksheet.iter_rows(min_row=2, values_only=True))
@@ -216,6 +205,9 @@ class TestCaseExcelImportService:
                 for version in Version.objects.filter(projects=project).distinct()
             } if project else {}
             error_messages.extend(cls._validate_row(row_data, version_map))
+            modules = [row_data.get(f'module_{level}', '') for level in range(1, 9)]
+            if any(modules[level] and not modules[level - 1] for level in range(1, 8)):
+                error_messages.append('模块层级不能跳级填写')
             maintainer = cls._get_project_maintainer(project, row_data.get('maintainer')) if project else None
             if row_data.get('maintainer') and maintainer is None:
                 error_messages.append(f"维护人不是项目成员或用户名/邮箱不存在: {row_data['maintainer']}")
@@ -231,10 +223,13 @@ class TestCaseExcelImportService:
             version_names = cls._split_csv(row_data.get('versions'))
 
             with transaction.atomic():
+                module = cls._get_or_create_module_path(project, modules)
                 testcase = TestCase.objects.create(
                     project=project,
+                    module=module,
                     title=row_data['title'],
                     description='',
+                    notes=row_data.get('notes', ''),
                     preconditions=row_data.get('preconditions', ''),
                     steps=row_data['steps'],
                     expected_result=row_data['expected_result'],
@@ -329,6 +324,16 @@ class TestCaseExcelImportService:
         if owner.username.lower() == identity.lower() or (owner.email and owner.email.lower() == identity.lower()):
             return owner
         return None
+
+    @staticmethod
+    def _get_or_create_module_path(project: Project, names: List[str]) -> Optional[TestCaseModule]:
+        """复用或逐级创建导入文件中的模块路径。"""
+        parent = None
+        for name in names:
+            if not name:
+                break
+            parent, _ = TestCaseModule.objects.get_or_create(project=project, parent=parent, name=name)
+        return parent
 
     @staticmethod
     def _split_csv(text: str) -> List[str]:
