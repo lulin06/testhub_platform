@@ -476,7 +476,15 @@ class PlaywrightTestEngine:
                 return True, log, None
 
             elif action_type == 'assert' and step.assert_type == 'urlContains':
+                timeout_seconds = (step.wait_time or 5000) / 1000
+                deadline = time.monotonic() + timeout_seconds
                 current_url = self.page.url
+                while resolved_assert_value and resolved_assert_value not in current_url:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(0.1, remaining))
+                    current_url = self.page.url
                 if resolved_assert_value and resolved_assert_value in current_url:
                     return True, f"✓ 断言通过: URL包含 '{resolved_assert_value}'\n  - 实际URL: '{current_url}'", None
                 log = f"✗ 断言失败: URL不包含 '{resolved_assert_value}'\n  - 实际URL: '{current_url}'"
@@ -526,6 +534,28 @@ class PlaywrightTestEngine:
             execution_time = 0
 
             if action_type == 'click':
+                action_params = getattr(step, 'action_params', None) or {}
+                if action_params.get('optional'):
+                    match_count = await locator.count()
+                    if not match_count or not await locator.is_visible():
+                        return True, f"✓ 可选点击目标 '{element_name}' 不存在或不可见，已跳过", None
+
+                if action_params.get('dispatch_click'):
+                    # RTE decorators can swallow locator.click while still reporting success.
+                    await locator.evaluate("""element => {
+                        const events = [
+                            new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }),
+                            new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }),
+                            new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
+                        ];
+                        events.forEach(event => element.dispatchEvent(event));
+                    }""")
+                    execution_time = round(time.time() - start_time, 2)
+                    log = f"✓ 分发鼠标事件点击元素 '{element_name}' 成功\n"
+                    log += f"  - 定位器: {locator_strategy}={locator_value}\n"
+                    log += f"  - 执行时间: {execution_time}秒"
+                    return True, log, None
+
                 # 检测是否是原生HTML select的option元素（优先检测，因为option元素特殊）
                 is_native_select_option = (
                     ('option[' in locator_value or ' > option' in locator_value or '//option' in locator_value) or

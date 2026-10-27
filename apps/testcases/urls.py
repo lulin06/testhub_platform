@@ -3,6 +3,9 @@ from . import views
 
 urlpatterns = [
     # 测试用例相关
+    path('modules/', views.TestCaseModuleListCreateView.as_view(), name='testcase-module-list'),
+    path('modules/<int:pk>/', views.TestCaseModuleDetailView.as_view(), name='testcase-module-detail'),
+    path('move/', views.TestCaseMoveView.as_view(), name='testcase-move'),
     path('', views.TestCaseListCreateView.as_view(), name='testcase-list'),
     path('import/template/', views.TestCaseImportTemplateDownloadView.as_view(), name='testcase-import-template'),
     path('import-records/', views.TestCaseImportRecordListCreateView.as_view(), name='testcase-import-record-list'),

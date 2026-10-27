@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from django.utils import timezone
 from django.db import connection
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -42,6 +42,16 @@ class TestExecutor:
         # 共享字典仅存活于这次套件运行；单用例和其他执行器各自创建上下文。
         self.run_variables = {}
         self.variables = UiVariableContext()
+
+    @staticmethod
+    def _goto_with_load_fallback(page, url, timeout=30000):
+        """等待 DOM 就绪，并对持续产生请求的页面有界地等待 networkidle。"""
+        page.goto(url, wait_until='domcontentloaded', timeout=timeout)
+        try:
+            page.wait_for_load_state('networkidle', timeout=min(timeout, 5000))
+        except PlaywrightTimeoutError:
+            return False
+        return True
 
     def create_execution_record(self):
         """创建测试执行记录"""
@@ -347,9 +357,9 @@ class TestExecutor:
                             import platform
                             is_linux = platform.system() == 'Linux'
 
-                            # 使用 networkidle 等待页面加载完成
-                            self.current_page.goto(self.test_suite.project.base_url, wait_until='networkidle',
-                                                   timeout=30000)
+                            self._goto_with_load_fallback(
+                                self.current_page, self.test_suite.project.base_url, timeout=30000
+                            )
 
                             # 额外等待，确保动态内容加载（Vue/React等SPA应用）
                             # 服务器无头模式需要更长的等待时间
@@ -707,7 +717,9 @@ class TestExecutor:
                 if not url:
                     step_result['error'] = '跳转URL失败: URL不能为空'
                 else:
-                    self.current_page.goto(url, wait_until='networkidle', timeout=max(step_data.get('wait_time', 30000), 30000))
+                    self._goto_with_load_fallback(
+                        self.current_page, url, timeout=max(step_data.get('wait_time', 30000), 30000)
+                    )
                     step_result['success'] = True
             elif step_data['action_type'] == 'assert' and step_data.get('assert_type') == 'urlContains':
                 expected_url = step_data.get('assert_value', '')
@@ -730,6 +742,24 @@ class TestExecutor:
 
                 # 根据操作类型执行动作
                 if step_data['action_type'] == 'click':
+                    click_params = step_data.get('action_params') or {}
+                    if click_params.get('optional'):
+                        match_count = target_locator.count()
+                        if not match_count or (match_count == 1 and not target_locator.is_visible()):
+                            step_result['success'] = True
+                            step_result['skipped'] = True
+                            step_result['result'] = '可选点击目标不存在或不可见，已跳过'
+                            return step_result
+
+                    if click_params.get('skip_if_disabled'):
+                        if target_locator.count() == 1 and not target_locator.is_enabled():
+                            step_result['success'] = True
+                            step_result['skipped'] = True
+                            step_result['result'] = '目标按钮已禁用，无待保存变更，跳过点击'
+                            return step_result
+
+                    force_click = bool(click_params.get('force'))
+
                     # 检测是否是原生HTML select的option元素（优先检测，因为option元素特殊）
                     is_native_select_option = (
                             (
@@ -954,10 +984,10 @@ class TestExecutor:
 
                                 # 使用更长的超时时间（至少10秒）
                                 extended_timeout = max(step_data['wait_time'], 10000)
-                                target_locator.click(timeout=extended_timeout)
+                                target_locator.click(timeout=extended_timeout, force=force_click)
                                 print(f"  ✓ 点击成功（超时: {extended_timeout}ms）")
                             else:
-                                target_locator.click(timeout=step_data['wait_time'])
+                                target_locator.click(timeout=step_data['wait_time'], force=force_click)
                             step_result['success'] = True
 
                 elif step_data['action_type'] == 'fill':
@@ -1013,12 +1043,18 @@ class TestExecutor:
                         ))
                     )
 
-                    if is_dropdown_option_wait:
-                        target_locator.wait_for(state='attached', timeout=step_data['wait_time'])
-                    else:
-                        target_locator.wait_for(state='visible', timeout=step_data['wait_time'])
-
-                    step_result['success'] = True
+                    try:
+                        if is_dropdown_option_wait:
+                            target_locator.wait_for(state='attached', timeout=step_data['wait_time'])
+                        else:
+                            target_locator.wait_for(state='visible', timeout=step_data['wait_time'])
+                        step_result['success'] = True
+                    except PlaywrightTimeoutError:
+                        if not (step_data.get('action_params') or {}).get('optional'):
+                            raise
+                        step_result['success'] = True
+                        step_result['skipped'] = True
+                        step_result['result'] = '可选等待目标未出现，已跳过'
 
                 elif step_data['action_type'] == 'hover':
                     target_locator.hover(timeout=step_data['wait_time'])

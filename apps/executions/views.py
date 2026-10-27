@@ -128,7 +128,7 @@ class TestPlanViewSet(viewsets.ModelViewSet):
             testcases = TestCase.objects.filter(
                 project_id__in=project_ids,
                 status__in=['draft', 'active']  # 包含草稿和激活状态的测试用例
-            ).values('id', 'title', 'priority', 'test_type', 'project__name')
+            ).values('id', 'title', 'priority', 'test_type', 'project_id', 'project__name', 'module_id')
             
             return Response({
                 'results': list(testcases)

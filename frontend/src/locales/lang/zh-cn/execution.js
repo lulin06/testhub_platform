@@ -78,6 +78,7 @@ export default {
   selectAssignees: '请选择执行人员',
   commentsPlaceholder: '请输入备注',
   testcaseSelectorTitle: '选择测试用例',
+  testcaseLibrary: '用例库',
   testcaseKeyword: '关键词',
   testcaseKeywordPlaceholder: '按标题搜索',
   testcasePriority: '优先级',

@@ -2686,6 +2686,11 @@ class TestCaseStepViewSet(viewsets.ModelViewSet):
         accessible_test_cases = TestCase.objects.filter(project__in=accessible_projects)
         return TestCaseStep.objects.filter(test_case__in=accessible_test_cases)
 
+    def perform_create(self, serializer):
+        if not serializer.validated_data.get('test_case'):
+            raise ValidationError({'test_case': '创建步骤时必须指定可访问的测试用例'})
+        serializer.save()
+
 
 class TestCaseExecutionViewSet(viewsets.ModelViewSet):
     """测试用例执行记录视图集"""

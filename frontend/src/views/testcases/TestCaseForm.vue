@@ -45,6 +45,11 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
+            <el-form-item :label="$t('testcase.modules')">
+              <el-tree-select v-model="form.module_id" :data="moduleOptions" node-key="id" check-strictly default-expand-all clearable :render-after-expand="false" :disabled="!form.project_id" :placeholder="$t('testcase.selectModule')" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
             <el-form-item :label="$t('testcase.priority')" prop="priority">
               <el-select v-model="form.priority" :placeholder="$t('testcase.selectPriority')">
                 <el-option :label="$t('testcase.low')" value="low" />
@@ -150,6 +155,7 @@ const submitting = ref(false)
 const projects = ref([])
 const projectVersions = ref([])
 const projectMembers = ref([])
+const moduleOptions = ref([])
 
 const form = reactive({
   title: '',
@@ -162,7 +168,8 @@ const form = reactive({
   expected_result: '',
   version_ids: [],
   notes: '',
-  maintainer_id: null
+  maintainer_id: null,
+  module_id: null
 })
 
 const rules = {
@@ -206,8 +213,20 @@ const fetchProjectVersions = async (projectId) => {
 const onProjectChange = (projectId) => {
   form.version_ids = []
   form.maintainer_id = null
+  form.module_id = null
   fetchProjectVersions(projectId)
   fetchProjectMembers(projectId)
+  fetchModules(projectId)
+}
+
+const fetchModules = async (projectId) => {
+  if (!projectId) { moduleOptions.value = []; return }
+  try {
+    const { data } = await api.get('/testcases/modules/', { params: { project: projectId } })
+    const addLabels = (nodes) => nodes.map(node => ({ ...node, label: node.name, children: addLabels(node.children || []) }))
+    moduleOptions.value = addLabels(data)
+  }
+  catch (error) { moduleOptions.value = []; ElMessage.error(t('testcase.fetchModulesFailed')) }
 }
 
 const fetchProjectMembers = async (projectId) => {
@@ -245,7 +264,8 @@ const handleSubmit = async () => {
   })
 }
 
-onMounted(() => {
-  fetchProjects()
+onMounted(async () => {
+  await fetchProjects()
+  if (form.project_id) await fetchModules(form.project_id)
 })
 </script>

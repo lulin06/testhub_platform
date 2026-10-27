@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import TestCase, TestCaseStep, TestCaseAttachment, TestCaseComment, TestCaseImportRecord
+from .models import TestCase, TestCaseModule, TestCaseStep, TestCaseAttachment, TestCaseComment, TestCaseImportRecord
 from apps.users.serializers import UserSerializer
 from apps.versions.serializers import VersionSimpleSerializer
 
@@ -26,6 +26,12 @@ class ProjectSimpleSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
 
+
+class TestCaseModuleSimpleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TestCaseModule
+        fields = ['id', 'name', 'project_id', 'parent_id']
+
 class TestCaseSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     assignee = UserSerializer(read_only=True)
@@ -34,6 +40,7 @@ class TestCaseSerializer(serializers.ModelSerializer):
     step_details = TestCaseStepSerializer(many=True, read_only=True)
     attachments = TestCaseAttachmentSerializer(many=True, read_only=True)
     comments = TestCaseCommentSerializer(many=True, read_only=True)
+    module = TestCaseModuleSimpleSerializer(read_only=True)
     
     class Meta:
         model = TestCase
@@ -45,13 +52,14 @@ class TestCaseListSerializer(serializers.ModelSerializer):
     assignee = serializers.SerializerMethodField()
     project = serializers.SerializerMethodField()
     versions = serializers.SerializerMethodField()
+    module = TestCaseModuleSimpleSerializer(read_only=True)
     
     class Meta:
         model = TestCase
         fields = [
             'id', 'title', 'description', 'notes', 'preconditions', 'steps', 'expected_result',
             'priority', 'test_type',
-            'author', 'assignee', 'project', 'versions', 'tags', 'created_at', 'updated_at'
+            'author', 'assignee', 'project', 'module', 'versions', 'tags', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
@@ -76,18 +84,20 @@ class TestCaseCreateSerializer(serializers.ModelSerializer):
         help_text="关联版本ID列表"
     )
     maintainer_id = serializers.IntegerField(required=False, write_only=True)
+    module_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
     
     class Meta:
         model = TestCase
         fields = [
             'title', 'description', 'notes', 'preconditions', 'steps', 'expected_result',
-            'priority', 'test_type', 'tags', 'project_id', 'version_ids', 'maintainer_id'
+            'priority', 'test_type', 'tags', 'project_id', 'version_ids', 'maintainer_id', 'module_id'
         ]
     
     def create(self, validated_data):
         version_ids = validated_data.pop('version_ids', [])
         # project_id会在视图的perform_create中处理
         validated_data.pop('project_id', None)
+        validated_data.pop('module_id', None)
         
         testcase = super().create(validated_data)
         
@@ -106,17 +116,19 @@ class TestCaseUpdateSerializer(serializers.ModelSerializer):
         help_text="关联版本ID列表"
     )
     maintainer_id = serializers.IntegerField(required=False, write_only=True)
+    module_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
     
     class Meta:
         model = TestCase
         fields = [
             'title', 'description', 'notes', 'preconditions', 'steps', 'expected_result',
-            'priority', 'test_type', 'tags', 'project_id', 'version_ids', 'maintainer_id'
+            'priority', 'test_type', 'tags', 'project_id', 'version_ids', 'maintainer_id', 'module_id'
         ]
     
     def update(self, instance, validated_data):
         version_ids = validated_data.pop('version_ids', None)
         maintainer_id = validated_data.pop('maintainer_id', None)
+        validated_data.pop('module_id', None)
         # project_id会在视图中处理
         validated_data.pop('project_id', None)
         

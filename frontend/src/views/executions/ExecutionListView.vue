@@ -111,7 +111,7 @@
 
     <!-- 创建测试计划对话框 -->
     <el-dialog :title="$t('execution.createPlanDialog')" v-model="isCreatePlanDialogOpen" width="600px" :close-on-click-modal="false">
-      <el-form :model="newPlanForm" :rules="planRules" ref="planFormRef" label-width="100px">
+      <el-form :model="newPlanForm" :rules="createPlanRules" ref="planFormRef" label-width="100px">
         <el-form-item :label="$t('execution.planName')" prop="name">
           <el-input v-model="newPlanForm.name" :placeholder="$t('execution.planNamePlaceholder')"></el-input>
         </el-form-item>
@@ -181,7 +181,7 @@
 
     <!-- 编辑测试计划对话框 -->
     <el-dialog :title="$t('execution.editPlanDialog')" v-model="isEditPlanDialogOpen" width="600px" :close-on-click-modal="false">
-      <el-form :model="editPlanForm" :rules="planRules" ref="editPlanFormRef" label-width="100px">
+      <el-form :model="editPlanForm" :rules="editPlanRules" ref="editPlanFormRef" label-width="100px">
         <el-form-item :label="$t('execution.planName')" prop="name">
           <el-input v-model="editPlanForm.name" :placeholder="$t('execution.planNamePlaceholder')"></el-input>
         </el-form-item>
@@ -254,75 +254,105 @@
     <el-dialog
       v-model="testcaseSelectorVisible"
       :title="$t('execution.testcaseSelectorTitle')"
-      width="1100px"
+      width="min(1200px, 96vw)"
+      class="testcase-selector-dialog"
       :close-on-click-modal="false"
     >
-      <div class="testcase-selector-container">
-        <div class="testcase-search-bar">
-          <el-form :inline="true">
-            <el-form-item :label="$t('execution.testcaseKeyword')">
-              <el-input
-                v-model="testcaseSelectorFilters.keyword"
-                :placeholder="$t('execution.testcaseKeywordPlaceholder')"
-                clearable
-                style="width: 220px"
-              />
-            </el-form-item>
-            <el-form-item :label="$t('execution.testcasePriority')">
-              <el-select v-model="testcaseSelectorFilters.priority" clearable style="width: 160px">
-                <el-option :label="$t('execution.allPriorities')" value="" />
-                <el-option :label="$t('testcase.low')" value="low" />
-                <el-option :label="$t('testcase.medium')" value="medium" />
-                <el-option :label="$t('testcase.high')" value="high" />
-                <el-option :label="$t('testcase.critical')" value="critical" />
-              </el-select>
-            </el-form-item>
-            <el-form-item :label="$t('execution.testcaseType')">
-              <el-select v-model="testcaseSelectorFilters.test_type" clearable style="width: 180px">
-                <el-option :label="$t('execution.allTypes')" value="" />
-                <el-option :label="$t('testcase.functional')" value="functional" />
-                <el-option :label="$t('testcase.integration')" value="integration" />
-                <el-option :label="$t('testcase.api')" value="api" />
-                <el-option :label="$t('testcase.ui')" value="ui" />
-                <el-option :label="$t('testcase.performance')" value="performance" />
-                <el-option :label="$t('testcase.security')" value="security" />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary">{{ $t('common.search') }}</el-button>
-              <el-button @click="resetTestcaseSelectorFilters">{{ $t('execution.resetSearch') }}</el-button>
-            </el-form-item>
-          </el-form>
-        </div>
-
-        <el-table
-          ref="testcaseSelectorTableRef"
-          :data="testcaseSelectorList"
-          v-loading="loadingTestcases"
-          @selection-change="handleTestcaseSelectorSelectionChange"
-          row-key="id"
-          max-height="420"
-        >
-          <el-table-column type="selection" width="55" :reserve-selection="true" />
-          <el-table-column :label="$t('execution.testcaseCode')" width="90">
-            <template #default="{ row }">
-              {{ row.id }}
+      <ResizableSplitPane v-model="testcaseSelectorSidebarWidth" :min-size="200" :max-size="380" :second-min-size="520" storage-key="execution-testcase-selector-sidebar-width" class="testcase-selector-container">
+        <template #first>
+        <aside class="testcase-library-panel">
+          <div class="testcase-library-header">
+            <strong>{{ $t('execution.testcaseLibrary') }}</strong>
+            <el-input v-model="testcaseLibrarySearch" size="small" clearable :placeholder="$t('testcase.searchModules')">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+          </div>
+          <div class="testcase-library-tree">
+            <div class="testcase-library-node tree-root" :class="{ active: testcaseLibrarySelection.id === '__all__' }" @click="selectTestcaseLibraryNode({ id: '__all__', type: 'all' })">
+              <el-icon><FolderOpened /></el-icon>
+              <span class="testcase-library-node-name">{{ $t('testcase.allCases') }}</span>
+              <span class="testcase-library-count">{{ filteredTestcases.length }}</span>
+            </div>
+          <el-tree
+            ref="testcaseLibraryTreeRef"
+            :data="filteredTestcaseLibraryTree"
+            :props="{ label: 'label', children: 'children' }"
+            node-key="id"
+            default-expand-all
+            highlight-current
+            :expand-on-click-node="false"
+            :current-node-key="testcaseLibrarySelection.id"
+            @node-click="selectTestcaseLibraryNode"
+          >
+            <template #default="{ node, data }">
+              <div class="testcase-library-node" :class="{ active: testcaseLibrarySelection.id === data.id }">
+                <el-icon><component :is="data.type === 'all' || data.type === 'project' ? FolderOpened : Folder" /></el-icon>
+                <span class="testcase-library-node-name" :title="node.label">{{ node.label }}</span>
+                <span class="testcase-library-count">{{ data.count }}</span>
+              </div>
             </template>
-          </el-table-column>
-          <el-table-column prop="title" :label="$t('execution.testcaseTitle')" min-width="420" show-overflow-tooltip />
-          <el-table-column prop="priority" :label="$t('execution.testcasePriority')" width="120">
-            <template #default="{ row }">
-              <el-tag :class="`priority-tag ${row.priority}`">{{ getTestcasePriorityText(row.priority) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="test_type" :label="$t('execution.testcaseType')" width="140">
-            <template #default="{ row }">
-              {{ getTestcaseTypeText(row.test_type) }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="project__name" :label="$t('execution.testcaseProject')" width="180" show-overflow-tooltip />
-        </el-table>
-      </div>
+          </el-tree>
+          <el-empty v-if="testcaseLibrarySearch.trim() && !filteredTestcaseLibraryTree.length" :description="$t('testcase.noModulesFound')" :image-size="60" />
+          </div>
+        </aside>
+        </template>
+        <template #second>
+        <section class="testcase-library-list">
+          <div class="testcase-search-bar">
+            <el-form :inline="true">
+              <el-form-item :label="$t('execution.testcaseKeyword')">
+                <el-input v-model="testcaseSelectorFilters.keyword" :placeholder="$t('execution.testcaseKeywordPlaceholder')" clearable style="width: 200px" />
+              </el-form-item>
+              <el-form-item :label="$t('execution.testcasePriority')">
+                <el-select v-model="testcaseSelectorFilters.priority" clearable style="width: 130px">
+                  <el-option :label="$t('execution.allPriorities')" value="" />
+                  <el-option :label="$t('testcase.low')" value="low" />
+                  <el-option :label="$t('testcase.medium')" value="medium" />
+                  <el-option :label="$t('testcase.high')" value="high" />
+                  <el-option :label="$t('testcase.critical')" value="critical" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="$t('execution.testcaseType')">
+                <el-select v-model="testcaseSelectorFilters.test_type" clearable style="width: 150px">
+                  <el-option :label="$t('execution.allTypes')" value="" />
+                  <el-option :label="$t('testcase.functional')" value="functional" />
+                  <el-option :label="$t('testcase.integration')" value="integration" />
+                  <el-option :label="$t('testcase.api')" value="api" />
+                  <el-option :label="$t('testcase.ui')" value="ui" />
+                  <el-option :label="$t('testcase.performance')" value="performance" />
+                  <el-option :label="$t('testcase.security')" value="security" />
+                </el-select>
+              </el-form-item>
+              <el-form-item>
+                <el-button @click="resetTestcaseSelectorFilters">{{ $t('execution.resetSearch') }}</el-button>
+              </el-form-item>
+            </el-form>
+          </div>
+          <div class="testcase-selector-table">
+            <el-table
+              ref="testcaseSelectorTableRef"
+              :data="testcaseSelectorList"
+              v-loading="loadingTestcases"
+              @selection-change="handleTestcaseSelectorSelectionChange"
+              row-key="id"
+              height="100%"
+            >
+              <el-table-column type="selection" width="55" :reserve-selection="true" />
+              <el-table-column :label="$t('execution.testcaseCode')" width="90">
+                <template #default="{ row }">{{ row.id }}</template>
+              </el-table-column>
+              <el-table-column prop="title" :label="$t('execution.testcaseTitle')" min-width="260" show-overflow-tooltip />
+              <el-table-column prop="priority" :label="$t('execution.testcasePriority')" width="120">
+                <template #default="{ row }"><el-tag :class="`priority-tag ${row.priority}`">{{ getTestcasePriorityText(row.priority) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column prop="test_type" :label="$t('execution.testcaseType')" width="140">
+                <template #default="{ row }">{{ getTestcaseTypeText(row.test_type) }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </section>
+        </template>
+      </ResizableSplitPane>
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="testcaseSelectorVisible = false">{{ $t('common.cancel') }}</el-button>
@@ -340,7 +370,8 @@ import { ref, reactive, onMounted, watch, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Delete } from '@element-plus/icons-vue'
+import { Plus, Delete, Folder, FolderOpened, Search } from '@element-plus/icons-vue'
+import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import api from '@/utils/api'
 
 const { t } = useI18n()
@@ -361,6 +392,11 @@ const isDeleting = ref(false)
 const testcaseSelectorVisible = ref(false)
 const testcaseSelectorMode = ref('create')
 const testcaseSelectorTableRef = ref()
+const testcaseSelectorSidebarWidth = ref(250)
+const testcaseSelectorModuleTrees = ref([])
+const testcaseLibraryTreeRef = ref()
+const testcaseLibrarySearch = ref('')
+const testcaseLibrarySelection = ref({ id: '', type: 'all' })
 const testcaseTempSelectedIds = ref([])
 const isSyncingTestcaseSelectorSelection = ref(false)
 const testcaseSelectorFilters = reactive({
@@ -406,7 +442,7 @@ const editPlanForm = reactive({
   is_active: true
 })
 
-const planRules = {
+const buildPlanRules = (form) => ({
   name: [
     { required: true, message: computed(() => t('execution.planNameRequired')), trigger: 'blur' }
   ],
@@ -419,7 +455,7 @@ const planRules = {
       message: computed(() => t('execution.testcasesRequired')),
       trigger: 'change',
       validator: (rule, value, callback) => {
-        if (!newPlanForm.projects || newPlanForm.projects.length === 0) {
+        if (!form.projects || form.projects.length === 0) {
           callback(new Error(t('execution.selectProjectBeforeTestcases')))
         } else if (!value || value.length === 0) {
           callback(new Error(t('execution.testcasesRequired')))
@@ -429,7 +465,10 @@ const planRules = {
       }
     }
   ]
-}
+})
+
+const createPlanRules = buildPlanRules(newPlanForm)
+const editPlanRules = buildPlanRules(editPlanForm)
 
 const fetchTestPlans = async () => {
   loading.value = true
@@ -521,7 +560,18 @@ const handleProjectChange = (selectedProjects) => {
 }
 
 const testcaseSelectorList = computed(() => {
-  return filteredTestcases.value.filter(item => {
+  let scopedTestcases = filteredTestcases.value
+  const selection = testcaseLibrarySelection.value
+  if (selection.type === 'project') {
+    scopedTestcases = scopedTestcases.filter(item => String(item.project_id) === String(selection.projectId))
+  } else if (selection.type === 'module') {
+    const moduleIds = new Set(selection.moduleIds.map(String))
+    scopedTestcases = scopedTestcases.filter(item => moduleIds.has(String(item.module_id)))
+  } else if (selection.type === 'unassigned') {
+    scopedTestcases = scopedTestcases.filter(item => !item.module_id)
+  }
+
+  return scopedTestcases.filter(item => {
     const keyword = testcaseSelectorFilters.keyword.trim().toLowerCase()
     const matchKeyword = !keyword || item.title?.toLowerCase().includes(keyword)
     const matchPriority = !testcaseSelectorFilters.priority || item.priority === testcaseSelectorFilters.priority
@@ -529,6 +579,84 @@ const testcaseSelectorList = computed(() => {
     return matchKeyword && matchPriority && matchType
   })
 })
+
+const filteredTestcaseLibraryTree = computed(() => {
+  const keyword = testcaseLibrarySearch.value.trim().toLowerCase()
+  if (!keyword) return testcaseSelectorModuleTrees.value
+
+  const filterModules = (nodes) => nodes.reduce((matches, item) => {
+    const children = filterModules(item.children || [])
+    if (item.label.toLowerCase().includes(keyword) || children.length) {
+      matches.push({ ...item, children })
+    }
+    return matches
+  }, [])
+
+  return testcaseSelectorModuleTrees.value.map(project => ({
+    ...project,
+    children: filterModules(project.children)
+  })).filter(project => project.children.length)
+})
+
+const buildTestcaseLibraryTree = (projectsList, modulesByProject, testcaseList) => {
+  const buildModuleNodes = (nodes, projectId) => nodes.map(module => {
+    const children = buildModuleNodes(module.children || [], projectId)
+    const descendantIds = [module.id, ...children.flatMap(child => child.moduleIds)]
+    return {
+      id: `module-${projectId}-${module.id}`,
+      type: 'module',
+      label: module.name,
+      count: testcaseList.filter(item => String(item.project_id) === String(projectId) && descendantIds.includes(item.module_id)).length,
+      moduleIds: descendantIds,
+      children
+    }
+  })
+
+  return projectsList.map(project => {
+    const projectCases = testcaseList.filter(item => String(item.project_id) === String(project.id))
+    const moduleNodes = buildModuleNodes(modulesByProject[project.id] || [], project.id)
+    const projectNode = {
+      id: `project-${project.id}`,
+      type: 'project',
+      projectId: project.id,
+      label: project.name,
+      count: projectCases.length,
+      children: [
+        ...moduleNodes,
+        {
+          id: `unassigned-${project.id}`,
+          type: 'unassigned',
+          projectId: project.id,
+          label: t('testcase.noModule'),
+          count: projectCases.filter(item => !item.module_id).length,
+          children: []
+        }
+      ]
+    }
+    return projectNode
+  })
+}
+
+const selectTestcaseLibraryNode = (data) => {
+  const selectedNode = data.type === 'module'
+    ? findTestcaseModuleNode(testcaseSelectorModuleTrees.value, data.id)
+    : null
+  testcaseLibrarySelection.value = {
+    id: data.type === 'all' ? '__all__' : data.id,
+    type: data.type,
+    projectId: data.projectId,
+    moduleIds: selectedNode?.moduleIds || []
+  }
+}
+
+const findTestcaseModuleNode = (nodes, id) => {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    const found = findTestcaseModuleNode(node.children || [], id)
+    if (found) return found
+  }
+  return null
+}
 
 const getCurrentPlanForm = () => (
   testcaseSelectorMode.value === 'edit' ? editPlanForm : newPlanForm
@@ -559,9 +687,19 @@ const openTestcaseSelector = async (mode) => {
     return
   }
 
-  if (!filteredTestcases.value.length) {
-    await loadTestcasesByProjects(currentForm.projects)
+  await loadTestcasesByProjects(currentForm.projects)
+  const selectedProjects = projects.value.filter(project => currentForm.projects.map(String).includes(String(project.id)))
+  let moduleResponses
+  try {
+    moduleResponses = await Promise.all(selectedProjects.map(project => api.get('/testcases/modules/', { params: { project: project.id } })))
+  } catch (error) {
+    ElMessage.error(t('testcase.fetchModulesFailed'))
+    return
   }
+  const modulesByProject = Object.fromEntries(selectedProjects.map((project, index) => [project.id, moduleResponses[index].data || []]))
+  testcaseSelectorModuleTrees.value = buildTestcaseLibraryTree(selectedProjects, modulesByProject, filteredTestcases.value)
+  testcaseLibrarySelection.value = { id: '__all__', type: 'all' }
+  testcaseLibrarySearch.value = ''
 
   testcaseTempSelectedIds.value = [...currentForm.testcases]
   testcaseSelectorVisible.value = true
@@ -582,8 +720,12 @@ const handleTestcaseSelectorSelectionChange = (selection) => {
 
 const confirmTestcaseSelection = () => {
   const currentForm = getCurrentPlanForm()
-  currentForm.testcases = [...testcaseTempSelectedIds.value]
+  currentForm.testcases = [...new Set(testcaseTempSelectedIds.value)]
   testcaseSelectorVisible.value = false
+  nextTick(() => {
+    const formRef = testcaseSelectorMode.value === 'edit' ? editPlanFormRef.value : planFormRef.value
+    formRef?.clearValidate('testcases')
+  })
 }
 
 const resetTestcaseSelectorFilters = async () => {
@@ -939,15 +1081,129 @@ onMounted(() => {
 }
 
 .testcase-selector-container {
+  height: min(68vh, 620px);
+  min-height: 420px;
+  border: 1px solid #e4e7ed;
+  overflow: hidden;
+}
+
+.testcase-library-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  height: 100%;
+  min-width: 0;
+}
+
+.testcase-library-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.testcase-library-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.testcase-library-node {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: #606266;
+  cursor: pointer;
+}
+
+.testcase-library-node.active {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.testcase-library-node-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.testcase-library-count {
+  flex: 0 0 auto;
+  min-width: 24px;
+  text-align: right;
+  color: #909399;
+  font-size: 12px;
+}
+
+.testcase-library-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  padding: 12px;
 }
 
 .testcase-search-bar {
-  padding: 16px;
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding: 10px 12px 0;
   background: #f8f9fa;
-  border-radius: 6px;
+  border-radius: 4px;
+}
+
+.testcase-search-bar :deep(.el-form--inline) {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.testcase-search-bar :deep(.el-form-item) {
+  flex: 0 0 auto;
+  margin-right: 0;
+  margin-bottom: 10px;
+}
+
+.testcase-search-bar :deep(.el-form-item__content) {
+  flex-wrap: nowrap;
+}
+
+.testcase-selector-table {
+  flex: 1;
+  min-height: 0;
+  padding-top: 12px;
+}
+
+.testcase-selector-table :deep(.el-table) {
+  height: 100%;
+}
+
+.testcase-selector-dialog :deep(.el-dialog__body) {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+@media (max-width: 760px) {
+  .testcase-selector-container {
+    height: 70vh;
+    min-height: 0;
+  }
+
+  .testcase-library-tree {
+    min-height: 0;
+  }
+
+  .testcase-library-list {
+    overflow-x: auto;
+  }
 }
 
 .priority-tag.low {
