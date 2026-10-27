@@ -66,6 +66,16 @@
               <el-option :label="$t('testcase.critical')" value="critical" />
             </el-select>
           </el-col>
+          <el-col :span="4">
+            <el-select v-model="maintainerFilter" :placeholder="$t('testcase.maintainerFilter')" clearable filterable @change="handleFilter">
+              <el-option
+                v-for="maintainer in maintainers"
+                :key="maintainer.id"
+                :label="maintainer.email ? `${maintainer.username} (${maintainer.email})` : maintainer.username"
+                :value="maintainer.id"
+              />
+            </el-select>
+          </el-col>
         </el-row>
       </div>
       
@@ -121,10 +131,10 @@
               {{ getTypeText(row.test_type) }}
             </template>
           </el-table-column>
-          <el-table-column prop="author.username" :label="$t('testcase.author')" width="120" />
-          <el-table-column prop="created_at" :label="$t('testcase.createdAt')" width="180">
+          <el-table-column prop="author.username" :label="$t('testcase.maintainer')" width="140" />
+          <el-table-column prop="updated_at" :label="$t('testcase.updatedAt')" width="180">
             <template #default="{ row }">
-              {{ formatDate(row.created_at) }}
+              {{ formatDate(row.updated_at) }}
             </template>
           </el-table-column>
           <el-table-column :label="$t('project.actions')" width="150" fixed="right">
@@ -231,12 +241,14 @@ const router = useRouter()
 const loading = ref(false)
 const testcases = ref([])
 const projects = ref([])
+const maintainers = ref([])
 const currentPage = ref(1)
 const pageSize = ref(15)
 const total = ref(0)
 const searchText = ref('')
 const projectFilter = ref('')
 const priorityFilter = ref('')
+const maintainerFilter = ref('')
 const selectedTestCases = ref([])
 const isDeleting = ref(false)
 const importDialogVisible = ref(false)
@@ -254,7 +266,8 @@ const fetchTestCases = async () => {
       page_size: pageSize.value,
       search: searchText.value,
       project: projectFilter.value,
-      priority: priorityFilter.value
+      priority: priorityFilter.value,
+      maintainer: maintainerFilter.value
     }
     const response = await api.get('/testcases/', { params })
     testcases.value = response.data.results || []
@@ -439,7 +452,8 @@ const exportToExcel = async () => {
             page_size: pageSize,
             search: searchText.value,
             project: projectFilter.value,
-            priority: priorityFilter.value
+            priority: priorityFilter.value,
+            maintainer: maintainerFilter.value
           }
         })
 
@@ -469,7 +483,7 @@ const exportToExcel = async () => {
 
     // 准备Excel数据
     const worksheetData = [
-      [t('testcase.excelNumber'), t('testcase.excelTitle'), t('testcase.excelProject'), t('testcase.excelVersions'), t('testcase.excelPreconditions'), t('testcase.excelSteps'), t('testcase.excelExpectedResult'), t('testcase.excelPriority'), t('testcase.excelTestType'), t('testcase.excelAuthor'), t('testcase.excelCreatedAt')]
+      [t('testcase.excelNumber'), t('testcase.excelTitle'), t('testcase.excelProject'), t('testcase.excelVersions'), t('testcase.excelPreconditions'), t('testcase.excelSteps'), t('testcase.excelExpectedResult'), t('testcase.excelPriority'), t('testcase.excelTestType'), t('testcase.excelAuthor'), t('testcase.excelCreatedAt'), t('testcase.updatedAt'), t('testcase.notes')]
     ]
 
     testCasesToExport.forEach((testcase, index) => {
@@ -488,7 +502,9 @@ const exportToExcel = async () => {
         getPriorityText(testcase.priority),
         getTypeText(testcase.test_type),
         testcase.author?.username || '',
-        formatDate(testcase.created_at)
+        formatDate(testcase.created_at),
+        formatDate(testcase.updated_at),
+        getNotesText(testcase.notes)
       ])
     })
     
@@ -507,7 +523,9 @@ const exportToExcel = async () => {
       { wch: 10 }, // Priority
       { wch: 15 }, // Test type
       { wch: 15 }, // Author
-      { wch: 20 }  // Created at
+      { wch: 20 }, // Created at
+      { wch: 20 }, // Updated at
+      { wch: 30 }  // Notes
     ]
     worksheet['!cols'] = colWidths
     
@@ -640,8 +658,24 @@ const fetchProjects = async () => {
   }
 }
 
-onMounted(() => {
-  fetchProjects()
+const fetchMaintainers = async () => {
+  const memberMap = new Map()
+  // 维护人候选来自当前用户可访问项目的成员集合，去重后供筛选使用。
+  const responses = await Promise.allSettled(
+    projects.value.map(project => api.get(`/projects/${project.id}/members/`))
+  )
+  responses.forEach(result => {
+    if (result.status !== 'fulfilled') return
+    ;(result.value.data || []).forEach(member => memberMap.set(member.id, member))
+  })
+  maintainers.value = [...memberMap.values()].sort((left, right) =>
+    (left.username || '').localeCompare(right.username || '')
+  )
+}
+
+onMounted(async () => {
+  await fetchProjects()
+  await fetchMaintainers()
   fetchTestCases()
 })
 </script>

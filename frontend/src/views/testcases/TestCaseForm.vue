@@ -18,7 +18,13 @@
             :placeholder="$t('testcase.caseDescriptionPlaceholder')"
           />
         </el-form-item>
-        
+
+        <el-form-item :label="$t('testcase.maintainer')">
+          <el-select v-model="form.maintainer_id" filterable :placeholder="$t('testcase.maintainer')">
+            <el-option v-for="member in projectMembers" :key="member.id" :label="member.email ? `${member.username} (${member.email})` : member.username" :value="member.id" />
+          </el-select>
+        </el-form-item>
+
         <el-row :gutter="20">
           <el-col :span="8">
             <el-form-item :label="$t('testcase.project')" prop="project_id">
@@ -113,6 +119,10 @@
           />
         </el-form-item>
 
+        <el-form-item :label="$t('testcase.notes')">
+          <RichTextEditor v-model="form.notes" />
+        </el-form-item>
+
         <el-form-item>
           <el-button type="primary" @click="handleSubmit" :loading="submitting">
             {{ $t('testcase.createCase') }}
@@ -121,6 +131,7 @@
         </el-form-item>
       </el-form>
     </div>
+
   </div>
 </template>
 
@@ -130,6 +141,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import api from '@/utils/api'
+import RichTextEditor from '@/components/RichTextEditor.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -137,6 +149,7 @@ const formRef = ref()
 const submitting = ref(false)
 const projects = ref([])
 const projectVersions = ref([])
+const projectMembers = ref([])
 
 const form = reactive({
   title: '',
@@ -147,7 +160,9 @@ const form = reactive({
   preconditions: '',
   steps: '',
   expected_result: '',
-  version_ids: []
+  version_ids: [],
+  notes: '',
+  maintainer_id: null
 })
 
 const rules = {
@@ -190,7 +205,20 @@ const fetchProjectVersions = async (projectId) => {
 
 const onProjectChange = (projectId) => {
   form.version_ids = []
+  form.maintainer_id = null
   fetchProjectVersions(projectId)
+  fetchProjectMembers(projectId)
+}
+
+const fetchProjectMembers = async (projectId) => {
+  projectMembers.value = []
+  if (!projectId) return
+  try {
+    const response = await api.get(`/projects/${projectId}/members/`)
+    projectMembers.value = response.data || []
+  } catch (error) {
+    console.error('Fetch project members failed:', error)
+  }
 }
 
 const onVersionChange = () => {

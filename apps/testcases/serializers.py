@@ -49,7 +49,7 @@ class TestCaseListSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestCase
         fields = [
-            'id', 'title', 'description', 'preconditions', 'steps', 'expected_result',
+            'id', 'title', 'description', 'notes', 'preconditions', 'steps', 'expected_result',
             'priority', 'test_type',
             'author', 'assignee', 'project', 'versions', 'tags', 'created_at', 'updated_at'
         ]
@@ -57,7 +57,7 @@ class TestCaseListSerializer(serializers.ModelSerializer):
     
     def get_author(self, obj):
         return {'id': obj.author.id, 'username': obj.author.username} if obj.author else None
-    
+
     def get_assignee(self, obj):
         return {'id': obj.assignee.id, 'username': obj.assignee.username} if obj.assignee else None
     
@@ -75,12 +75,13 @@ class TestCaseCreateSerializer(serializers.ModelSerializer):
         allow_empty=True,
         help_text="关联版本ID列表"
     )
+    maintainer_id = serializers.IntegerField(required=False, write_only=True)
     
     class Meta:
         model = TestCase
         fields = [
-            'title', 'description', 'preconditions', 'steps', 'expected_result',
-            'priority', 'test_type', 'tags', 'project_id', 'version_ids'
+            'title', 'description', 'notes', 'preconditions', 'steps', 'expected_result',
+            'priority', 'test_type', 'tags', 'project_id', 'version_ids', 'maintainer_id'
         ]
     
     def create(self, validated_data):
@@ -104,20 +105,25 @@ class TestCaseUpdateSerializer(serializers.ModelSerializer):
         allow_empty=True,
         help_text="关联版本ID列表"
     )
+    maintainer_id = serializers.IntegerField(required=False, write_only=True)
     
     class Meta:
         model = TestCase
         fields = [
-            'title', 'description', 'preconditions', 'steps', 'expected_result',
-            'priority', 'test_type', 'tags', 'project_id', 'version_ids'
+            'title', 'description', 'notes', 'preconditions', 'steps', 'expected_result',
+            'priority', 'test_type', 'tags', 'project_id', 'version_ids', 'maintainer_id'
         ]
     
     def update(self, instance, validated_data):
         version_ids = validated_data.pop('version_ids', None)
+        maintainer_id = validated_data.pop('maintainer_id', None)
         # project_id会在视图中处理
         validated_data.pop('project_id', None)
         
         instance = super().update(instance, validated_data)
+        if maintainer_id is not None:
+            instance.author_id = maintainer_id
+            instance.save(update_fields=['author'])
         
         # 更新版本关联
         if version_ids is not None:

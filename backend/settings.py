@@ -346,11 +346,11 @@ CHANNEL_LAYERS = {
     },
 }
 
-# SMS Configuration (阿里云短信)
-SMS_ACCESS_KEY_ID = config('SMS_ACCESS_KEY_ID', default='')
-SMS_ACCESS_KEY_SECRET = config('SMS_ACCESS_KEY_SECRET', default='')
-SMS_SIGN_NAME = config('SMS_SIGN_NAME', default='杭州智穹云启科技')
-SMS_REGISTER_TEMPLATE_CODE = config('SMS_REGISTER_TEMPLATE_CODE', default='SMS_133001115')
+# 短信配置当前停用；保留环境变量映射，恢复短信功能时再取消注释。
+# SMS_ACCESS_KEY_ID = config('SMS_ACCESS_KEY_ID', default='')
+# SMS_ACCESS_KEY_SECRET = config('SMS_ACCESS_KEY_SECRET', default='')
+# SMS_SIGN_NAME = config('SMS_SIGN_NAME', default='杭州智穹云启科技')
+# SMS_REGISTER_TEMPLATE_CODE = config('SMS_REGISTER_TEMPLATE_CODE', default='SMS_133001115')
 
 # Cache Configuration
 CACHES = {

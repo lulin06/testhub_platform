@@ -1,3 +1,4 @@
+import re
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from .models import User, UserProfile
@@ -16,13 +17,27 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'date_joined', 'created_at', 'updated_at']
 
 class UserCreateSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(min_length=3, max_length=20, validators=[])
+    email = serializers.EmailField(required=True)
     password = serializers.CharField(write_only=True, min_length=6)
     password_confirm = serializers.CharField(write_only=True)
     
     class Meta:
         model = User
-        fields = ['username', 'email', 'password', 'password_confirm',
-                 'first_name', 'last_name', 'phone', 'department', 'position']
+        fields = ['username', 'email', 'password', 'password_confirm', 'department', 'position']
+
+    def validate_username(self, value):
+        # 保留 Django 用户名允许的字符，并额外允许用户名中间包含空格。
+        if not re.fullmatch(r'[\w.@+\- ]+', value):
+            raise serializers.ValidationError('用户名只能包含字母、数字、空格及 @ . + - _')
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError('该用户名已被使用')
+        return value
+
+    def validate_email(self, value):
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError('该邮箱已被注册')
+        return value
     
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
@@ -34,6 +49,23 @@ class UserCreateSerializer(serializers.ModelSerializer):
         user = User.objects.create_user(**validated_data)
         return user
 
+
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(min_length=3, max_length=20, validators=[])
+    email = serializers.EmailField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'first_name', 'department', 'position']
+
+    def validate_username(self, value):
+        # 与注册规则保持一致，允许用户名中间包含空格。
+        if not re.fullmatch(r'[\w.@+\- ]+', value):
+            raise serializers.ValidationError('用户名只能包含字母、数字、空格及 @ . + - _')
+        if User.objects.filter(username=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError('该用户名已被使用')
+        return value
+
 class LoginSerializer(serializers.Serializer):
     # 使用自定义校验文案，避免 DRF 的默认英文字段错误落到“登录失败”兜底提示。
     username = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -44,22 +76,24 @@ class LoginSerializer(serializers.Serializer):
         password = attrs.get('password') or ''
 
         if not username and not password:
-            raise serializers.ValidationError('请输入用户名和密码', code='credentials_required')
+            raise serializers.ValidationError('请输入用户名或邮箱和密码', code='credentials_required')
         if not username:
-            raise serializers.ValidationError('请输入用户名', code='username_required')
+            raise serializers.ValidationError('请输入用户名或邮箱', code='username_required')
         if not password:
             raise serializers.ValidationError('请输入密码', code='password_required')
 
         # 先查用户再校验密码，这样停用用户可以得到明确提示；密码不匹配仍使用
         # 统一文案，避免暴露普通账号是否存在。
         user = User.objects.filter(username=username).first()
+        if not user:
+            user = User.objects.filter(email__iexact=username).first()
         if user and not user.is_active:
             raise serializers.ValidationError('用户已被禁用', code='account_disabled')
-        user = authenticate(username=username, password=password)
-        if not user:
+        authenticated_user = authenticate(username=user.username, password=password) if user else None
+        if not authenticated_user:
             raise serializers.ValidationError('用户名或密码错误', code='invalid_credentials')
         
-        attrs['user'] = user
+        attrs['user'] = authenticated_user
         return attrs
 
 

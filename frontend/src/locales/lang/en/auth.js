@@ -2,7 +2,7 @@ export default {
   // Login page
   welcomeBack: 'Welcome Back',
   loginSubtitle: 'Sign in to continue with the all-in-one intelligent testing platform',
-  usernamePlaceholder: 'Enter username',
+  usernamePlaceholder: 'Enter username or email',
   passwordPlaceholder: 'Enter password',
   phonePlaceholder: 'Enter phone number',
   captchaPlaceholder: 'Image verification code',
@@ -20,8 +20,8 @@ export default {
   loginFailed: 'Login failed',
   networkError: 'Network error. Please check your connection and try again',
   loginErrors: {
-    credentials_required: 'Please enter your username and password',
-    username_required: 'Please enter your username',
+    credentials_required: 'Please enter your username or email and password',
+    username_required: 'Please enter your username or email',
     password_required: 'Please enter your password',
     invalid_credentials: 'Incorrect username or password',
     account_disabled: 'This account has been disabled',
@@ -69,7 +69,7 @@ export default {
   scheduledTasks: 'Scheduled Tasks',
 
   // Validation messages
-  usernameRequired: 'Please enter username',
+  usernameRequired: 'Please enter username or email',
   usernameLength: 'Username length must be between 3 and 20 characters',
   emailRequired: 'Please enter email',
   emailFormat: 'Please enter a valid email',

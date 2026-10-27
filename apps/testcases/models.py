@@ -32,6 +32,7 @@ class TestCase(models.Model):
     versions = models.ManyToManyField(Version, blank=True, related_name='testcases', verbose_name='关联版本')
     title = models.CharField(max_length=500, verbose_name='用例标题')
     description = models.TextField(blank=True, verbose_name='用例描述')
+    notes = models.TextField(blank=True, verbose_name='备注')
     preconditions = models.TextField(blank=True, verbose_name='前置条件')
     steps = models.TextField(blank=True, max_length=1000, verbose_name='操作步骤')
     expected_result = models.TextField(verbose_name='预期结果')
