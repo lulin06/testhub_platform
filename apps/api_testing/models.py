@@ -94,6 +94,11 @@ class ApiRequest(models.Model):
     pre_request_script = models.TextField(blank=True, verbose_name='请求前脚本')
     post_request_script = models.TextField(blank=True, verbose_name='请求后脚本')
     assertions = models.JSONField(default=list, verbose_name='断言规则')
+    extractors = models.JSONField(default=list, verbose_name='响应变量提取')
+    cookies = models.JSONField(default=list, verbose_name='Cookies')
+    pre_actions = models.JSONField(default=list, verbose_name='前置操作')
+    post_actions = models.JSONField(default=list, verbose_name='后置操作')
+    settings = models.JSONField(default=dict, verbose_name='请求设置')
     order = models.IntegerField(default=0, verbose_name='排序')
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='创建者')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
@@ -165,6 +170,7 @@ class TestSuite(models.Model):
                                 verbose_name='所属项目')
     name = models.CharField(max_length=200, verbose_name='套件名称')
     description = models.TextField(blank=True, verbose_name='套件描述')
+    folder = models.CharField(max_length=200, blank=True, default='', verbose_name='场景用例分组')
     requests = models.ManyToManyField(ApiRequest, through='TestSuiteRequest', verbose_name='包含请求')
     environment = models.ForeignKey(Environment, on_delete=models.SET_NULL, null=True, blank=True,
                                     verbose_name='执行环境')
@@ -200,6 +206,50 @@ class TestSuiteRequest(models.Model):
 
     def __str__(self):
         return f"{self.test_suite.name} - {self.request.name}"
+
+
+class TestSet(models.Model):
+    """测试套：把多个场景用例(TestSuite)组成固定回归集，可定时执行"""
+    project = models.ForeignKey(ApiProject, on_delete=models.CASCADE, related_name='test_sets',
+                                verbose_name='所属项目')
+    name = models.CharField(max_length=200, verbose_name='测试套名称')
+    description = models.TextField(blank=True, verbose_name='描述')
+    suites = models.ManyToManyField(TestSuite, through='TestSetItem', verbose_name='包含场景用例')
+    environment = models.ForeignKey(Environment, on_delete=models.SET_NULL, null=True, blank=True,
+                                    verbose_name='执行环境')
+    cron = models.CharField(max_length=100, blank=True, default='', verbose_name='定时cron表达式')
+    enabled = models.BooleanField(default=True, verbose_name='是否启用定时')
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='test_sets',
+                                   verbose_name='创建者')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        db_table = 'api_test_sets'
+        verbose_name = '测试套'
+        verbose_name_plural = '测试套'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name
+
+
+class TestSetItem(models.Model):
+    """测试套与场景用例的顺序关联"""
+    test_set = models.ForeignKey(TestSet, on_delete=models.CASCADE, verbose_name='测试套')
+    test_suite = models.ForeignKey(TestSuite, on_delete=models.CASCADE, verbose_name='场景用例')
+    order = models.IntegerField(default=0, verbose_name='执行顺序')
+    enabled = models.BooleanField(default=True, verbose_name='是否启用')
+
+    class Meta:
+        db_table = 'api_test_set_items'
+        verbose_name = '测试套项'
+        verbose_name_plural = '测试套项'
+        unique_together = [('test_set', 'test_suite')]
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.test_set.name} - {self.test_suite.name}"
 
 
 class TestExecution(models.Model):

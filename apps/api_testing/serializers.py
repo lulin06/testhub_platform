@@ -17,6 +17,7 @@ from .models import (
     RequestHistory, TestSuite, TestExecution, TestSuiteRequest,
     ScheduledTask, TaskExecutionLog, NotificationLog,
     TaskNotificationSetting, OperationLog, AIServiceConfig,
+    TestSet, TestSetItem,
 )
 
 User = get_user_model()
@@ -103,7 +104,9 @@ class ApiRequestSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'request_type', 'method', 'url',
             'headers', 'params', 'body', 'auth', 'pre_request_script',
-            'post_request_script', 'assertions', 'collection', 'order', 'created_by',
+            'post_request_script', 'assertions', 'extractors',
+            'cookies', 'pre_actions', 'post_actions', 'settings',
+            'collection', 'order', 'created_by',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -184,7 +187,7 @@ class TestSuiteSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestSuite
         fields = [
-            'id', 'name', 'description', 'project', 'environment',
+            'id', 'name', 'description', 'folder', 'project', 'environment',
             'suite_requests', 'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -192,6 +195,35 @@ class TestSuiteSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data['created_by'] = self.context['request'].user
         return super().create(validated_data)
+
+
+class TestSetSerializer(serializers.ModelSerializer):
+    created_by = UserSerializer(read_only=True)
+    suites = TestSuiteSerializer(many=True, read_only=True)
+    suite_ids = serializers.ListField(child=serializers.IntegerField(), write_only=True, required=False)
+
+    class Meta:
+        model = TestSet
+        fields = ['id', 'name', 'description', 'project', 'environment', 'suites',
+                  'suite_ids', 'cron', 'enabled', 'created_by', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def create(self, validated_data):
+        suite_ids = validated_data.pop('suite_ids', [])
+        validated_data['created_by'] = self.context['request'].user
+        ts = super().create(validated_data)
+        for i, sid in enumerate(suite_ids):
+            TestSetItem.objects.create(test_set=ts, test_suite_id=sid, order=i)
+        return ts
+
+    def update(self, instance, validated_data):
+        suite_ids = validated_data.pop('suite_ids', None)
+        ts = super().update(instance, validated_data)
+        if suite_ids is not None:
+            ts.testsetitem_set.all().delete()
+            for i, sid in enumerate(suite_ids):
+                TestSetItem.objects.create(test_set=ts, test_suite_id=sid, order=i)
+        return ts
 
 
 class TestExecutionSerializer(serializers.ModelSerializer):

@@ -188,7 +188,22 @@ def execute_test_suite(test_suite, environment, executed_by):
                 )
                 end_time = time.time()
                 response_time = (end_time - start_time) * 1000
-                
+
+                # --- 响应变量提取：把本步响应的值写入 variables，供后续步骤使用 ---
+                for ext in (api_request.extractors or []):
+                    var_name = ext.get('variable') or ext.get('name')
+                    json_path = ext.get('path') or ext.get('json_path')
+                    if not var_name or not json_path:
+                        continue
+                    try:
+                        resp_json = json.loads(response.text)
+                        from jsonpath_ng import parse
+                        matches = parse(json_path).find(resp_json)
+                        if matches:
+                            variables[var_name] = matches[0].value
+                    except Exception:
+                        pass
+
                 # 执行断言验证
                 assertions = api_request.assertions or []
                 for assertion in assertions:

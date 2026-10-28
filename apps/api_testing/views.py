@@ -26,6 +26,7 @@ from .models import (
     RequestHistory, TestSuite, TestExecution, TestSuiteRequest,
     ScheduledTask, TaskExecutionLog, NotificationLog,
     TaskNotificationSetting, OperationLog, AIServiceConfig,
+    TestSet, TestSetItem,
 )
 
 from .serializers import (
@@ -35,7 +36,8 @@ from .serializers import (
     ScheduledTaskSerializer, TaskExecutionLogSerializer,
     NotificationLogSerializer, TaskNotificationSettingSerializer,
     NotificationLogDetailSerializer,
-    TaskNotificationSettingDetailSerializer, OperationLogSerializer
+    TaskNotificationSettingDetailSerializer, OperationLogSerializer,
+    TestSetSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -962,6 +964,50 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
             return resolver.resolve(data)
         else:
             return data
+
+
+class TestSetViewSet(viewsets.ModelViewSet):
+    """测试套：固定场景用例集合，可定时执行"""
+    serializer_class = TestSetSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['project']
+
+    def get_queryset(self):
+        user = self.request.user
+        return TestSet.objects.filter(
+            project__in=ApiProject.objects.filter(
+                models.Q(owner=user) | models.Q(members=user)
+            )
+        ).distinct()
+
+    @action(detail=True, methods=['post'])
+    def execute(self, request, pk=None):
+        """依次执行测试套内的每个场景用例"""
+        ts = self.get_object()
+        items = TestSetItem.objects.filter(test_set=ts, enabled=True).order_by('order')
+        results = []
+        for item in items:
+            suite = item.test_suite
+            try:
+                resp = TestSuiteViewSet().execute(request, pk=suite.id)
+                data = resp.data
+                results.append({
+                    'suite_id': suite.id,
+                    'suite_name': suite.name,
+                    'status': data.get('status'),
+                    'passed': data.get('passed_requests'),
+                    'failed': data.get('failed_requests'),
+                    'total': data.get('total_requests'),
+                })
+            except Exception as e:
+                results.append({
+                    'suite_id': suite.id,
+                    'suite_name': suite.name,
+                    'status': 'FAILED',
+                    'error': str(e),
+                })
+        return Response({'test_set': ts.name, 'results': results})
 
 
 class TestSuiteRequestViewSet(viewsets.ModelViewSet):

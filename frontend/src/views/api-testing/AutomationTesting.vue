@@ -29,40 +29,46 @@
         
         <div class="suite-list">
           <div class="list-header">
-            <span>{{ $t('apiTesting.automation.testSuites') }}</span>
+            <span>场景用例</span>
             <el-button size="small" text @click="loadTestSuites">
               <el-icon><Refresh /></el-icon>
             </el-button>
           </div>
-          
-          <el-scrollbar height="400px">
-            <div
-              v-for="suite in testSuites"
-              :key="suite.id"
-              class="suite-item"
-              :class="{ active: selectedSuite?.id === suite.id }"
-              @click="selectSuite(suite)"
+          <div class="batch-bar">
+            <el-button size="small" type="success" :disabled="selectedSuiteIds.length === 0" @click="runSelectedSuites">
+              <el-icon><VideoPlay /></el-icon> 批量运行 ({{ selectedSuiteIds.length }})
+            </el-button>
+          </div>
+
+          <el-scrollbar height="520px">
+            <el-tree
+              ref="suiteTreeRef"
+              :data="suiteTree"
+              :props="{ label: 'name', children: 'children' }"
+              :default-expanded-keys="treeDefaultExpandedKeys"
+              node-key="id"
+              show-checkbox
+              :check-on-click-node="false"
+              :filter-node-method="() => true"
+              @check="onSuiteCheck"
             >
-              <div class="suite-info">
-                <div class="suite-name">{{ suite.name }}</div>
-                <div class="suite-meta">
-                  {{ $t('apiTesting.automation.requestCount', { n: suite.suite_requests?.length || 0 }) }}
+              <template #default="{ data }">
+                <div
+                  class="suite-tree-node"
+                  :class="{ active: data.type === 'suite' && selectedSuite?.id === data.id }"
+                  @click="data.type === 'suite' && selectSuite(data)"
+                >
+                  <el-icon v-if="data.type === 'folder'"><Folder /></el-icon>
+                  <el-icon v-else><Document /></el-icon>
+                  <span class="suite-name">{{ data.name }}</span>
+                  <el-icon
+                    v-if="data.type === 'suite'"
+                    class="del-icon"
+                    @click.stop="handleSuiteAction({ action: 'delete', suite: data })"
+                  ><Delete /></el-icon>
                 </div>
-              </div>
-              <el-dropdown @command="handleSuiteAction" trigger="click">
-                <el-button size="small" text>
-                  <el-icon><MoreFilled /></el-icon>
-                </el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item :command="{ action: 'run', suite }">{{ $t('apiTesting.automation.run') }}</el-dropdown-item>
-                    <el-dropdown-item :command="{ action: 'edit', suite }">{{ $t('apiTesting.common.edit') }}</el-dropdown-item>
-                    <el-dropdown-item :command="{ action: 'duplicate', suite }">{{ $t('apiTesting.common.copy') }}</el-dropdown-item>
-                    <el-dropdown-item :command="{ action: 'delete', suite }" divided>{{ $t('apiTesting.common.delete') }}</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
+              </template>
+            </el-tree>
           </el-scrollbar>
         </div>
       </div>
@@ -359,6 +365,36 @@
         <el-button @click="showExecutionDialog = false">{{ $t('apiTesting.common.close') }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- 编辑断言对话框 -->
+    <el-dialog
+      v-model="showAssertionDialog"
+      title="编辑断言"
+      width="700px"
+      :close-on-click-modal="false"
+    >
+      <div style="margin-bottom: 10px">
+        <el-button size="small" type="primary" @click="addAssertionRow">
+          <el-icon><Plus /></el-icon> 新增断言
+        </el-button>
+      </div>
+      <div v-for="(a, i) in editingAssertions" :key="i" class="assertion-row">
+        <el-select v-model="a.type" size="small" style="width: 130px">
+          <el-option label="状态码" value="status_code" />
+          <el-option label="JSON路径" value="json_path" />
+          <el-option label="包含文本" value="contains" />
+        </el-select>
+        <el-input v-if="a.type === 'json_path'" v-model="a.json_path" placeholder="$.code" size="small" style="width: 180px" />
+        <el-input v-model="a.expected" placeholder="期望值" size="small" style="width: 140px" />
+        <el-button size="small" type="danger" circle @click="editingAssertions.splice(i, 1)">
+          <el-icon><Delete /></el-icon>
+        </el-button>
+      </div>
+      <template #footer>
+        <el-button @click="showAssertionDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveAssertions" :loading="savingAssertions">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -367,7 +403,7 @@ import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import {
-  Plus, Refresh, MoreFilled, VideoPlay, Edit,
+  Plus, Refresh, MoreFilled, VideoPlay, Edit, Delete,
   Folder, Document
 } from '@element-plus/icons-vue'
 import api from '@/utils/api'
@@ -383,6 +419,7 @@ const executions = ref([])
 const environments = ref([])
 const requestTree = ref([])
 const running = ref(false)
+const suiteTreeRef = ref(null)
 const executionsLoading = ref(false)
 const showCreateSuiteDialog = ref(false)
 const showAddRequestDialog = ref(false)
@@ -510,14 +547,60 @@ const loadTestSuites = async () => {
   if (!selectedProject.value) return
 
   try {
-    const response = await api.get('/api-testing/test-suites/', {
-      params: { project: selectedProject.value }
-    })
-    testSuites.value = response.data.results || response.data
+    let all = []
+    let url = '/api-testing/test-suites/?project=' + selectedProject.value
+    while (url) {
+      const response = await api.get(url)
+      const data = response.data.results || response.data || []
+      all = all.concat(data)
+      let next = response.data.next
+      if (next) next = next.replace(/^https?:\/\/[^/]+/, '').replace(/^\/api/, '')
+      url = next
+    }
+    testSuites.value = all
   } catch (error) {
     ElMessage.error(t('apiTesting.messages.error.loadTestSuites'))
   }
 }
+
+// 按 folder 分组场景用例，左侧树展示（folder 名升序，嵌套路径建子文件夹）
+const suiteTree = computed(() => {
+  const root = []
+  const map = {}
+  const ensureFolder = (parts) => {
+    let cur = root
+    let path = ''
+    for (const p of parts) {
+      path = path ? path + '/' + p : p
+      if (!map[path]) {
+        const node = { id: 'f-' + path, name: p, type: 'folder', children: [] }
+        map[path] = node
+        cur.push(node)
+      }
+      cur = map[path].children
+    }
+    return cur
+  }
+  for (const s of testSuites.value) {
+    const f = s.folder || '未分组'
+    const bucket = ensureFolder(f.split('/'))
+    bucket.push({ ...s, type: 'suite' })
+  }
+  const sortTree = (nodes) => {
+    nodes.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
+      return a.name.localeCompare(b.name, 'zh', { numeric: true })
+    })
+    nodes.forEach(n => n.children && sortTree(n.children))
+  }
+  sortTree(root)
+  return root
+})
+const treeDefaultExpandedKeys = computed(() =>
+  suiteTree.value
+    .filter(g => g.type === 'folder' && !g.name.startsWith('22'))
+    .map(g => g.id)
+)
 
 const loadEnvironments = async () => {
   try {
@@ -679,6 +762,27 @@ const runTestSuite = async (suite) => {
   }
 }
 
+// 多选场景用例批量运行
+const selectedSuiteIds = ref([])
+const onSuiteCheck = () => {
+  const nodes = suiteTreeRef.value?.getCheckedNodes() || []
+  selectedSuiteIds.value = nodes.filter(n => n.type === 'suite').map(n => n.id)
+}
+const runSelectedSuites = async () => {
+  running.value = true
+  try {
+    for (const id of [...selectedSuiteIds.value]) {
+      await api.post(`/api-testing/test-suites/${id}/execute/`)
+    }
+    ElMessage.success(`已批量运行 ${selectedSuiteIds.value.length} 个场景用例`)
+    await loadExecutions()
+  } catch (e) {
+    ElMessage.error('批量运行失败')
+  } finally {
+    running.value = false
+  }
+}
+
 const editSuite = (suite) => {
   editingSuite.value = suite
   suiteForm.name = suite.name
@@ -832,8 +936,39 @@ const updateRequestEnabled = async (suiteRequest) => {
   }
 }
 
-const editAssertions = (suiteRequest) => {
-  ElMessage.info(t('apiTesting.messages.info.featureInDevelopment'))
+const showAssertionDialog = ref(false)
+const editingAssertions = ref([])
+const editingRequestId = ref(null)
+const savingAssertions = ref(false)
+
+const editAssertions = async (suiteRequest) => {
+  try {
+    const rid = suiteRequest.request.id
+    const res = await api.get(`/api-testing/requests/${rid}/`)
+    editingRequestId.value = rid
+    editingAssertions.value = JSON.parse(JSON.stringify(res.data.assertions || []))
+    showAssertionDialog.value = true
+  } catch (e) {
+    ElMessage.error('加载断言失败')
+  }
+}
+
+const addAssertionRow = () => {
+  editingAssertions.value.push({ name: '断言' + (editingAssertions.value.length + 1), type: 'json_path', json_path: '', expected: '' })
+}
+
+const saveAssertions = async () => {
+  savingAssertions.value = true
+  try {
+    await api.put(`/api-testing/requests/${editingRequestId.value}/`, { assertions: editingAssertions.value })
+    ElMessage.success('断言已保存')
+    showAssertionDialog.value = false
+    await reloadCurrentSuite()
+  } catch (e) {
+    ElMessage.error('保存断言失败')
+  } finally {
+    savingAssertions.value = false
+  }
 }
 
 const removeRequest = async (suiteRequest) => {
@@ -975,6 +1110,32 @@ onMounted(() => {
 .suite-name {
   font-weight: 500;
   margin-bottom: 4px;
+}
+
+.suite-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  padding: 2px 4px;
+}
+.suite-tree-node .del-icon {
+  margin-left: auto;
+  visibility: hidden;
+  color: #f56c6c;
+  cursor: pointer;
+}
+.suite-tree-node:hover .del-icon {
+  visibility: visible;
+}
+.batch-bar {
+  padding: 6px 0;
+}
+.assertion-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .suite-meta {
