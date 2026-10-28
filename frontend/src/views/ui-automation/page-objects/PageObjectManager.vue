@@ -307,6 +307,7 @@
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Plus, Search, Edit, Delete, Document,
@@ -333,6 +334,7 @@ const leftPanelWidth = ref(350)
 // 响应式数据
 const projects = ref([])
 const projectId = ref('')
+useRememberedProject(projectId, projects)
 const pageObjects = ref([])
 const selectedPageObject = ref(null)
 const selectedCanvasElement = ref(null)
@@ -741,7 +743,7 @@ onMounted(async () => {
   await loadProjects()
 
   if (projects.value.length > 0) {
-    projectId.value = projects.value[0].id
+    projectId.value = getPreferredProjectId(projects.value, projects.value[0].id)
     await onProjectChange()
   }
 })

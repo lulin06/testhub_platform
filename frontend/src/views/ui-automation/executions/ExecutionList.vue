@@ -266,6 +266,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, View, WarningFilled, Refresh } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 import {
   getTestCaseExecutions,
   getUiProjects,
@@ -279,6 +280,7 @@ const { t } = useI18n()
 // 项目和执行数据
 const projects = ref([])
 const projectId = ref('')
+useRememberedProject(projectId, projects)
 const executions = ref([])
 const loading = ref(false)
 const total = ref(0)
@@ -614,7 +616,7 @@ const handleRerun = async () => {
 onMounted(async () => {
   await loadProjects()
   if (projects.value.length > 0) {
-    projectId.value = projects.value[0].id
+    projectId.value = getPreferredProjectId(projects.value, projects.value[0].id)
   }
   await loadExecutions()
 })

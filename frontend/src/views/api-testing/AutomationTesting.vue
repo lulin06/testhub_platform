@@ -379,12 +379,14 @@ import {
 } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 import dayjs from 'dayjs'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 
 const { t } = useI18n()
 const sidebarWidth = ref(300)
 
 const projects = ref([])
 const selectedProject = ref(null)
+useRememberedProject(selectedProject, projects)
 const testSuites = ref([])
 const selectedSuite = ref(null)
 const executions = ref([])
@@ -503,7 +505,7 @@ const loadProjects = async () => {
     const httpProjects = projects.value.filter(project => project.project_type !== 'WEBSOCKET')
 
     if (httpProjects.length > 0 && !selectedProject.value) {
-      selectedProject.value = httpProjects[0].id
+      selectedProject.value = getPreferredProjectId(httpProjects, httpProjects[0].id)
       await onProjectChange()
     } else if (httpProjects.length === 0) {
       // 如果没有HTTP项目，清空选择
@@ -635,7 +637,7 @@ const onProjectChange = async () => {
     // 重置为第一个HTTP项目或清空选择
     const httpProjects = projects.value.filter(project => project.project_type !== 'WEBSOCKET')
     if (httpProjects.length > 0) {
-      selectedProject.value = httpProjects[0].id
+      selectedProject.value = getPreferredProjectId(httpProjects, httpProjects[0].id)
     } else {
       selectedProject.value = null
     }

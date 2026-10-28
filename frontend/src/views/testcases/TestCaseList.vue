@@ -115,7 +115,7 @@
             </el-input>
           </el-col>
           <el-col :span="4">
-            <el-select v-model="projectFilter" :placeholder="$t('testcase.relatedProject')" clearable @change="handleFilter">
+            <el-select v-model="projectFilter" :placeholder="$t('testcase.relatedProject')" clearable @change="handleProjectFilterChange">
               <el-option
                 v-for="project in projects"
                 :key="project.id"
@@ -143,7 +143,6 @@
             </el-select>
           </el-col>
         </el-row>
-        <el-checkbox v-if="selectedModule && selectedModule !== 'none'" v-model="includeChildModules" @change="handleFilter">{{ $t('testcase.includeSubmodules') }}</el-checkbox>
       </div>
       
       <div class="table-container">
@@ -153,21 +152,28 @@
           style="width: 100%"
           height="100%"
           @selection-change="handleSelectionChange">
-          <el-table-column type="selection" width="55" />
-          <el-table-column type="index" :label="$t('testcase.serialNumber')" width="80" :index="getSerialNumber" />
-          <el-table-column prop="title" :label="$t('testcase.caseTitle')" min-width="250">
+          <el-table-column type="selection" width="40" />
+          <el-table-column type="index" :label="$t('testcase.serialNumber')" width="60" :index="getSerialNumber" />
+          <el-table-column prop="title" :label="$t('testcase.caseTitle')" min-width="360">
             <template #default="{ row }">
-              <el-link @click="goToTestCase(row.id)" type="primary">
-                {{ row.title }}
-              </el-link>
+              <el-tooltip :content="row.title" placement="top" :show-after="500">
+                <div
+                  class="case-title"
+                  role="link"
+                  tabindex="0"
+                  @click="goToTestCase(row.id)"
+                  @keydown.enter="goToTestCase(row.id)"
+                  @keydown.space.prevent="goToTestCase(row.id)"
+                >{{ row.title }}</div>
+              </el-tooltip>
             </template>
           </el-table-column>
-          <el-table-column prop="project.name" :label="$t('testcase.relatedProject')" width="150">
+          <el-table-column prop="project.name" :label="$t('testcase.relatedProject')" width="120">
             <template #default="{ row }">
               {{ row.project?.name || '-' }}
             </template>
           </el-table-column>
-          <el-table-column prop="versions" :label="$t('testcase.relatedVersions')" width="200">
+          <el-table-column prop="versions" :label="$t('testcase.relatedVersions')" width="120">
             <template #default="{ row }">
               <div v-if="row.versions && row.versions.length > 0" class="version-tags">
                 <el-tag 
@@ -188,26 +194,28 @@
               <span v-else class="no-version">{{ $t('testcase.noVersion') }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="priority" :label="$t('testcase.priority')" width="100">
+          <el-table-column prop="priority" :label="$t('testcase.priority')" width="80">
             <template #default="{ row }">
               <el-tag :class="`priority-tag ${row.priority}`">{{ getPriorityText(row.priority) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="test_type" :label="$t('testcase.testType')" width="120">
+          <el-table-column prop="test_type" :label="$t('testcase.testType')" width="100">
             <template #default="{ row }">
               {{ getTypeText(row.test_type) }}
             </template>
           </el-table-column>
-          <el-table-column prop="author.username" :label="$t('testcase.maintainer')" width="140" />
-          <el-table-column prop="updated_at" :label="$t('testcase.updatedAt')" width="180">
+          <el-table-column prop="author.username" :label="$t('testcase.maintainer')" width="100" />
+          <el-table-column prop="updated_at" :label="$t('testcase.updatedAt')" width="150">
             <template #default="{ row }">
               {{ formatDate(row.updated_at) }}
             </template>
           </el-table-column>
           <el-table-column :label="$t('project.actions')" width="150" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" @click="editTestCase(row)">{{ $t('common.edit') }}</el-button>
-              <el-button size="small" type="danger" @click="deleteTestCase(row)">{{ $t('common.delete') }}</el-button>
+              <div class="row-actions">
+                <el-button size="small" @click="editTestCase(row)">{{ $t('common.edit') }}</el-button>
+                <el-button size="small" type="danger" @click="deleteTestCase(row)">{{ $t('common.delete') }}</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -306,6 +314,8 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'TestCaseList' })
+
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -315,6 +325,7 @@ import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import api from '@/utils/api'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
+import { getPreferredProjectId, rememberSelectedProject } from '@/utils/projectSelection'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -418,10 +429,22 @@ const loadModuleTree = async () => {
   } catch (error) { ElMessage.error(t('testcase.fetchModulesFailed')) }
 }
 const handleModuleProjectChange = () => {
+  rememberSelectedProject(moduleProjectId.value, projects.value)
   selectedModule.value = ''
   projectFilter.value = moduleProjectId.value || ''
   if (!moduleProjectId.value) { allProjectCount.value = 0; unassignedCount.value = 0 }
   loadModuleTree()
+  handleFilter()
+}
+const handleProjectFilterChange = async () => {
+  if (projectFilter.value) {
+    rememberSelectedProject(projectFilter.value, projects.value)
+    if (moduleProjectId.value !== projectFilter.value) {
+      moduleProjectId.value = projectFilter.value
+      selectedModule.value = ''
+      await loadModuleTree()
+    }
+  }
   handleFilter()
 }
 const selectModule = (id) => { selectedModule.value = id; projectFilter.value = moduleProjectId.value || ''; handleFilter() }
@@ -852,7 +875,10 @@ const fetchMaintainers = async () => {
 
 onMounted(async () => {
   await fetchProjects()
-  moduleProjectId.value = projectFilter.value || (projects.value[0]?.id ?? '')
+  const preferredProjectId = getPreferredProjectId(projects.value)
+  moduleProjectId.value = preferredProjectId ?? (projects.value[0]?.id ?? '')
+  if (moduleProjectId.value) rememberSelectedProject(moduleProjectId.value, projects.value)
+  if (preferredProjectId) projectFilter.value = preferredProjectId
   await loadModuleTree()
   await fetchMaintainers()
   fetchTestCases()
@@ -942,6 +968,23 @@ onMounted(async () => {
   :deep(.el-table__body-wrapper) {
     overflow-y: auto !important;
   }
+}
+
+.case-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
 }
 
 .pagination-container {

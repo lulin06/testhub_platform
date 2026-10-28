@@ -987,6 +987,7 @@ import KeyValueEditor from './components/KeyValueEditor.vue'
 import DataFactorySelector from '@/components/DataFactorySelector.vue'
 import { RequestModelParser } from '@/utils/requestModel'
 import { getVariableFunctions } from '@/api/data-factory'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 import { CodeGenerator } from '@/utils/codeGenerator'
 import { debounce } from 'lodash-es'
 import { useI18n } from 'vue-i18n'
@@ -998,6 +999,7 @@ const treeRef = ref(null)
 const expandedKeys = ref([])
 const projects = ref([])
 const selectedProject = ref(null)
+useRememberedProject(selectedProject, projects)
 const collections = ref([])
 const flatCollections = ref([])
 const environments = ref([])
@@ -1123,7 +1125,7 @@ const loadProjects = async () => {
     // 后端可能返回分页格式 { results: [...] } 或直接返回数组
     projects.value = response.data.results || response.data || []
     if (projects.value.length > 0) {
-      selectedProject.value = projects.value[0].id
+      selectedProject.value = getPreferredProjectId(projects.value, projects.value[0].id)
       await loadCollections(selectedProject.value)
       await loadEnvironments(selectedProject.value)
     }

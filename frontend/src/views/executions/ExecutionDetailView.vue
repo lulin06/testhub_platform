@@ -101,59 +101,40 @@
           class="execution-table"
           :row-class-name="rowClassName"
           @selection-change="handleSelectionChange"
+          @row-click="openCaseExecution"
           :row-key="(row) => row.id">
           <el-table-column type="selection" width="48" :reserve-selection="true" />
-          <el-table-column
-            type="index"
-            :label="$t('execution.serialNumber')"
-            width="72"
-            :index="getSerialNumber" />
-          <el-table-column prop="testcase" :label="$t('execution.testCase')" min-width="250" />
-          <el-table-column :label="$t('execution.executionStatus')" width="160">
+          <el-table-column :label="$t('execution.testcaseId')" width="90">
             <template #default="scope">
-              <el-select
-                v-model="scope.row.status"
-                size="small"
-                class="status-select">
-                <el-option :label="$t('execution.untested')" value="untested" />
-                <el-option :label="$t('execution.passed')" value="passed" />
-                <el-option :label="$t('execution.failed')" value="failed" />
-                <el-option :label="$t('execution.blocked')" value="blocked" />
-                <el-option :label="$t('execution.retest')" value="retest" />
-              </el-select>
+              {{ scope.row.testcase?.id ?? '-' }}
             </template>
           </el-table-column>
-          <el-table-column :label="$t('execution.comments')" min-width="250">
+          <el-table-column :label="$t('execution.testcaseTitle')" min-width="240" show-overflow-tooltip>
             <template #default="scope">
-              <el-input
-                v-model="scope.row.comments"
-                :placeholder="$t('execution.commentsPlaceholder')"
-                type="textarea"
-                :rows="2"
-                size="small">
-              </el-input>
+              {{ scope.row.testcase?.title || scope.row.testcase || '-' }}
             </template>
           </el-table-column>
-          <el-table-column :label="$t('execution.actions')" width="180" fixed="right" class-name="action-col">
+          <el-table-column :label="$t('execution.testcasePriority')" width="100">
             <template #default="scope">
-              <div class="action-buttons">
-                <el-button
-                  size="small"
-                  type="primary"
-                  :icon="Check"
-                  :loading="savingId === scope.row.id"
-                  :disabled="!isRowDirty(scope.row)"
-                  @click="saveRunCase(scope.row, run)">
-                  {{ $t('common.save') }}
-                </el-button>
-                <el-button
-                  size="small"
-                  :icon="Clock"
-                  @click="viewCaseHistory(scope.row)">
-                  {{ $t('execution.viewHistory') }}
-                </el-button>
-              </div>
+              <el-tag size="small" effect="light">{{ getPriorityText(scope.row.testcase?.priority) }}</el-tag>
             </template>
+          </el-table-column>
+          <el-table-column :label="$t('execution.testcaseType')" width="120">
+            <template #default="scope">{{ getTestTypeText(scope.row.testcase?.test_type) }}</template>
+          </el-table-column>
+          <el-table-column :label="$t('execution.maintainer')" width="120">
+            <template #default="scope">{{ scope.row.testcase?.author?.username || '-' }}</template>
+          </el-table-column>
+          <el-table-column :label="$t('execution.executedBy')" width="120">
+            <template #default="scope">{{ scope.row.executed_by?.username || '-' }}</template>
+          </el-table-column>
+          <el-table-column :label="$t('execution.executionStatus')" width="110">
+            <template #default="scope">
+              <el-tag :type="getStatusType(scope.row.status)" size="small">{{ getStatusText(scope.row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column :label="$t('execution.lastExecutedAt')" width="175">
+            <template #default="scope">{{ formatDate(scope.row.executed_at) }}</template>
           </el-table-column>
         </el-table>
 
@@ -199,15 +180,118 @@
         </el-table-column>
       </el-table>
     </el-dialog>
+
+    <el-dialog
+      v-model="caseExecutionDialogVisible"
+      :title="$t('execution.caseExecutionDetail')"
+      width="min(1440px, 96vw)"
+      top="4vh"
+      class="case-execution-dialog"
+      :close-on-click-modal="false">
+      <template #header>
+        <div class="case-dialog-header">
+          <div class="case-dialog-heading">
+            <span class="case-dialog-title">{{ $t('execution.caseExecutionDetail') }}</span>
+            <span v-if="currentCase" class="case-dialog-current-title">
+              {{ currentCase.testcase?.title || currentCase.testcase }}
+            </span>
+          </div>
+          <div v-if="currentCase" class="case-dialog-toolbar">
+            <el-button
+              class="case-nav-button"
+              :icon="ArrowUp"
+              :disabled="currentCaseIndex <= 0"
+              @click="navigateCase(-1)" />
+            <span class="case-dialog-count">{{ currentCaseIndex + 1 }} / {{ allCases.length }}</span>
+            <el-button
+              class="case-nav-button"
+              :icon="ArrowDown"
+              :disabled="currentCaseIndex >= allCases.length - 1"
+              @click="navigateCase(1)" />
+            <el-divider direction="vertical" />
+            <el-button
+              type="primary"
+              :loading="savingId === currentCase?.id"
+              :disabled="!isRowDirty(currentCase)"
+              @click="saveCurrentCase">
+              {{ $t('common.save') }}
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="savingId === currentCase?.id"
+              :disabled="!isRowDirty(currentCase)"
+              @click="saveCurrentAndNext">
+              {{ $t('execution.saveAndNext') }}
+            </el-button>
+          </div>
+        </div>
+      </template>
+      <div v-if="currentCase" class="case-execution-layout">
+        <section class="case-information">
+          <div class="case-title-row">
+            <div>
+              <div class="case-id">{{ $t('execution.testcaseId') }} {{ currentCase.testcase?.id }}</div>
+              <h2>{{ currentCase.testcase?.title || currentCase.testcase }}</h2>
+            </div>
+            <el-button link type="primary" :icon="Clock" @click="viewCaseHistory(currentCase)">
+              {{ $t('execution.viewHistory') }}
+            </el-button>
+          </div>
+          <div class="case-meta-grid">
+            <div><span>{{ $t('execution.testcasePriority') }}</span>{{ getPriorityText(currentCase.testcase?.priority) }}</div>
+            <div><span>{{ $t('execution.testcaseType') }}</span>{{ getTestTypeText(currentCase.testcase?.test_type) }}</div>
+            <div><span>{{ $t('execution.maintainer') }}</span>{{ currentCase.testcase?.author?.username || '-' }}</div>
+            <div><span>{{ $t('execution.project') }}</span>{{ currentCase.testcase?.project_name || '-' }}</div>
+          </div>
+          <div class="case-section">
+            <h3>{{ $t('execution.preconditions') }}</h3>
+            <p>{{ currentCase.testcase?.preconditions || $t('execution.noData') }}</p>
+          </div>
+          <div class="case-section">
+            <h3>{{ $t('execution.steps') }}</h3>
+            <p>{{ currentCase.testcase?.steps || $t('execution.noData') }}</p>
+          </div>
+          <div class="case-section">
+            <h3>{{ $t('execution.expectedResult') }}</h3>
+            <p>{{ currentCase.testcase?.expected_result || $t('execution.noData') }}</p>
+          </div>
+          <div v-if="currentCase.testcase?.description" class="case-section">
+            <h3>{{ $t('execution.testcaseDescription') }}</h3>
+            <p>{{ currentCase.testcase.description }}</p>
+          </div>
+        </section>
+        <aside class="case-result-panel">
+          <h3>{{ $t('execution.executionResult') }}</h3>
+          <el-radio-group v-model="currentCase.status" class="result-status-group">
+            <el-radio-button value="passed" class="result-option--passed">{{ $t('execution.passed') }}</el-radio-button>
+            <el-radio-button value="failed" class="result-option--failed">{{ $t('execution.failed') }}</el-radio-button>
+            <el-radio-button value="blocked" class="result-option--blocked">{{ $t('execution.blocked') }}</el-radio-button>
+            <el-radio-button value="retest" class="result-option--retest">{{ $t('execution.retest') }}</el-radio-button>
+          </el-radio-group>
+          <div class="result-field">
+            <label>{{ $t('execution.actualResult') }}</label>
+            <el-input v-model="currentCase.actual_result" type="textarea" :rows="6" resize="vertical" />
+          </div>
+          <div class="result-field">
+            <label>{{ $t('execution.comments') }}</label>
+            <el-input v-model="currentCase.comments" type="textarea" :rows="5" resize="vertical" :placeholder="$t('execution.commentsPlaceholder')" />
+          </div>
+          <div class="last-execution-meta">
+            <div><span>{{ $t('execution.lastExecutedAt') }}</span>{{ formatDate(currentCase.executed_at) }}</div>
+            <div><span>{{ $t('execution.executedBy') }}</span>{{ currentCase.executed_by?.username || '-' }}</div>
+          </div>
+        </aside>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Clock, Check, Stamp, FolderOpened } from '@element-plus/icons-vue'
+import { Delete, Clock, Stamp, FolderOpened, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 
 const { t } = useI18n()
@@ -216,6 +300,8 @@ const route = useRoute()
 const testPlan = ref({})
 const historyDialogVisible = ref(false)
 const currentCaseHistory = ref([])
+const caseExecutionDialogVisible = ref(false)
+const currentCaseIndex = ref(-1)
 const selectedCases = ref([])
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -228,6 +314,12 @@ const savedState = ref({})
 // 单行保存中的用例 id；批量保存中的 run.id
 const savingId = ref(null)
 const batchRunId = ref(null)
+
+const allCases = computed(() => (testPlan.value.test_runs || []).flatMap(run =>
+  (run.run_cases || []).map(runCase => ({ run, runCase }))
+))
+const currentCase = computed(() => allCases.value[currentCaseIndex.value]?.runCase || null)
+const currentRun = computed(() => allCases.value[currentCaseIndex.value]?.run || null)
 
 const fetchTestPlan = async () => {
   try {
@@ -250,7 +342,11 @@ const buildSavedState = () => {
     for (const run of runs) {
       if (run.run_cases) {
         for (const rc of run.run_cases) {
-          map[rc.id] = { status: rc.status, comments: rc.comments || '' }
+          map[rc.id] = {
+            status: rc.status,
+            actual_result: rc.actual_result || '',
+            comments: rc.comments || ''
+          }
         }
       }
     }
@@ -260,9 +356,12 @@ const buildSavedState = () => {
 
 // 行是否有未提交改动（状态或备注与快照不一致）
 const isRowDirty = (runCase) => {
+  if (!runCase) return false
   const saved = savedState.value[runCase.id]
   if (!saved) return false
-  return runCase.status !== saved.status || (runCase.comments || '') !== saved.comments
+  return runCase.status !== saved.status ||
+    (runCase.actual_result || '') !== saved.actual_result ||
+    (runCase.comments || '') !== saved.comments
 }
 
 // 某 run 内未提交的用例数
@@ -294,19 +393,26 @@ const recomputeProgress = (run) => {
 
 // 保存单个用例：状态 + 备注一次提交，只产生一条历史记录
 const saveRunCase = async (runCase, run) => {
-  if (!isRowDirty(runCase)) return
+  if (!runCase || !isRowDirty(runCase)) return false
   savingId.value = runCase.id
   try {
-    await api.patch(`/executions/run_cases/${runCase.id}/update_status/`, {
+    const response = await api.patch(`/executions/run_cases/${runCase.id}/update_status/`, {
       status: runCase.status,
+      actual_result: runCase.actual_result || '',
       comments: runCase.comments || ''
     })
-    // 本地同步快照 -> 行变为"已保存"
-    savedState.value[runCase.id] = { status: runCase.status, comments: runCase.comments || '' }
+    Object.assign(runCase, response.data)
+    savedState.value[runCase.id] = {
+      status: runCase.status,
+      actual_result: runCase.actual_result || '',
+      comments: runCase.comments || ''
+    }
     if (run) recomputeProgress(run)
     ElMessage.success(t('execution.statusUpdateSuccess'))
+    return true
   } catch (error) {
     ElMessage.error(t('execution.statusUpdateFailed'))
+    return false
   } finally {
     savingId.value = null
   }
@@ -323,9 +429,14 @@ const saveAllInRun = async (run) => {
     try {
       await api.patch(`/executions/run_cases/${rc.id}/update_status/`, {
         status: rc.status,
+        actual_result: rc.actual_result || '',
         comments: rc.comments || ''
       })
-      savedState.value[rc.id] = { status: rc.status, comments: rc.comments || '' }
+      savedState.value[rc.id] = {
+        status: rc.status,
+        actual_result: rc.actual_result || '',
+        comments: rc.comments || ''
+      }
       ok++
     } catch (error) {
       fail++
@@ -348,6 +459,33 @@ const viewCaseHistory = async (runCase) => {
   } catch (error) {
     ElMessage.error(t('execution.fetchHistoryFailed'))
   }
+}
+
+// 点击用例行打开执行弹窗；复选框点击只改变批量选择状态。
+const openCaseExecution = (runCase, column, event) => {
+  if (event.target.closest('.el-checkbox, .el-table__expand-icon')) return
+  const index = allCases.value.findIndex(item => item.runCase.id === runCase.id)
+  if (index < 0) return
+  currentCaseIndex.value = index
+  caseExecutionDialogVisible.value = true
+}
+
+// 在当前测试计划的全部执行用例中前后切换。
+const navigateCase = (offset) => {
+  const nextIndex = currentCaseIndex.value + offset
+  if (nextIndex >= 0 && nextIndex < allCases.value.length) currentCaseIndex.value = nextIndex
+}
+
+// 弹窗保存沿用用例执行接口，保留最后操作人和执行时间。
+const saveCurrentCase = async () => {
+  await saveRunCase(currentCase.value, currentRun.value)
+}
+
+const saveCurrentAndNext = async () => {
+  const saved = isRowDirty(currentCase.value)
+    ? await saveRunCase(currentCase.value, currentRun.value)
+    : true
+  if (saved && currentCaseIndex.value < allCases.value.length - 1) navigateCase(1)
 }
 
 // 处理选择变化
@@ -505,6 +643,28 @@ const getStatusText = (status) => {
     'retest': t('execution.retest')
   }
   return textMap[status] || status
+}
+
+const getPriorityText = (priority) => {
+  const textMap = {
+    low: t('execution.priorityLow'),
+    medium: t('execution.priorityMedium'),
+    high: t('execution.priorityHigh'),
+    critical: t('execution.priorityCritical')
+  }
+  return textMap[priority] || '-'
+}
+
+const getTestTypeText = (type) => {
+  const textMap = {
+    functional: t('execution.typeFunctional'),
+    integration: t('execution.typeIntegration'),
+    api: t('execution.typeApi'),
+    ui: t('execution.typeUi'),
+    performance: t('execution.typePerformance'),
+    security: t('execution.typeSecurity')
+  }
+  return textMap[type] || '-'
 }
 
 onMounted(() => {
@@ -805,6 +965,10 @@ onMounted(() => {
   color: var(--g-ink);
 }
 
+:deep(.execution-table .el-table__body tr) {
+  cursor: pointer;
+}
+
 /* 未提交行：极淡暖底，提示有待保存的改动 */
 :deep(.execution-table .row-dirty td) {
   background: #fffaf2 !important;
@@ -849,6 +1013,232 @@ onMounted(() => {
   font-size: 14px;
 }
 
+.case-dialog-header,
+.case-dialog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.case-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  width: 100%;
+}
+
+.case-dialog-heading,
+.case-dialog-toolbar {
+  min-width: 0;
+}
+
+.case-dialog-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.case-dialog-title {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.case-dialog-current-title {
+  max-width: min(34vw, 460px);
+  overflow: hidden;
+  color: #909399;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.case-dialog-toolbar {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.case-nav-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.case-dialog-count,
+.case-id {
+  color: var(--g-ink-soft);
+  font-size: 13px;
+}
+
+.case-execution-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  min-height: min(68vh, 680px);
+  max-height: 72vh;
+  border: 1px solid var(--g-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.case-information {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 22px 24px;
+}
+
+.case-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.case-title-row h2 {
+  margin: 5px 0 0;
+  color: #303133;
+  font-size: 19px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.case-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding: 16px 0 20px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.case-meta-grid div,
+.last-execution-meta div {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  color: #303133;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.case-meta-grid span,
+.last-execution-meta span {
+  flex: 0 0 auto;
+  color: #909399;
+}
+
+.case-section {
+  padding-top: 18px;
+}
+
+.case-section h3,
+.case-result-panel h3 {
+  margin: 0 0 9px;
+  color: #303133;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.case-section p {
+  margin: 0;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.case-result-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 22px 18px;
+  background: #fafafa;
+  border-left: 1px solid var(--g-line);
+}
+
+.result-status-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+:deep(.result-status-group .el-radio-button__inner) {
+  border: 1px solid #dcdfe6;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+:deep(.result-option--passed .el-radio-button__inner) {
+  color: #00a870;
+  border-color: #00a870;
+}
+
+:deep(.result-option--passed .el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  color: #fff;
+  background: #00a870;
+  border-color: #00a870;
+}
+
+:deep(.result-option--failed .el-radio-button__inner) {
+  color: #e53935;
+  border-color: #e53935;
+}
+
+:deep(.result-option--failed .el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  color: #fff;
+  background: #e53935;
+  border-color: #e53935;
+}
+
+:deep(.result-option--blocked .el-radio-button__inner) {
+  color: #e6a000;
+  border-color: #e6a000;
+}
+
+:deep(.result-option--blocked .el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  color: #fff;
+  background: #e6a000;
+  border-color: #e6a000;
+}
+
+:deep(.result-option--retest .el-radio-button__inner) {
+  color: #7b8490;
+  border-color: #a8abb2;
+}
+
+:deep(.result-option--retest .el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  color: #fff;
+  background: #7b8490;
+  border-color: #7b8490;
+}
+
+.result-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.result-field label {
+  color: #606266;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.last-execution-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 15px;
+  border-top: 1px solid #e4e7ed;
+}
+
 /* —— 响应式 —— */
 @media (max-width: 768px) {
   .execution-detail {
@@ -860,6 +1250,39 @@ onMounted(() => {
   }
   .plan-header__title {
     font-size: 19px;
+  }
+
+  .case-execution-layout {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: 75vh;
+  }
+
+  .case-result-panel {
+    border-top: 1px solid var(--g-line);
+    border-left: 0;
+  }
+
+  .case-dialog-header,
+  .case-dialog-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .case-dialog-header {
+    gap: 12px;
+  }
+
+  .case-dialog-current-title {
+    max-width: 80vw;
+  }
+
+  .case-dialog-toolbar {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .case-meta-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

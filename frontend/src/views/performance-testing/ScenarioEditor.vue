@@ -725,7 +725,8 @@
 
 <script setup>
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, toRef, onMounted, onBeforeUnmount } from 'vue'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -798,6 +799,7 @@ const form = reactive({
   env_config: { base_url: '', headers: {}, verify_ssl: false },
   runtime_config: { timeout: 30, sample_interval: 1, keep_alive: true, proxy: '' }
 })
+useRememberedProject(toRef(form, 'project'), projects)
 
 const currentStep = computed(() => steps.value[activeIndex.value] || null)
 
@@ -966,7 +968,7 @@ async function load() {
   try {
     await Promise.all([loadEngineStatus(), loadProjects()])
     if (isNew.value) {
-      form.project = Number(route.query.project) || projects.value[0]?.id || null
+      form.project = Number(route.query.project) || getPreferredProjectId(projects.value, projects.value[0]?.id) || null
       form.name = ''
       await Promise.all([loadDataFiles(form.project), loadScriptFiles(form.project), loadUploadFiles(form.project)])
       dirty.value = true

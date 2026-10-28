@@ -476,10 +476,12 @@ import {
   getStorageStates, createStorageState, updateStorageState, deleteStorageState, downloadStorageState, updateStorageStateContent
 } from '@/api/ui_automation'
 import { getVariableFunctions } from '@/api/data-factory'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 
 // 响应式数据
 const projects = ref([])
 const projectId = ref('')
+useRememberedProject(projectId, projects)
 const testCases = ref([])
 const selectedTestCase = ref(null)
 const currentSteps = ref([])
@@ -1285,7 +1287,7 @@ onMounted(async () => {
   console.log('loadVariableFunctions 完成')
 
   if (projects.value.length > 0) {
-    projectId.value = projects.value[0].id
+    projectId.value = getPreferredProjectId(projects.value, projects.value[0].id)
     await onProjectChange()
   }
 })

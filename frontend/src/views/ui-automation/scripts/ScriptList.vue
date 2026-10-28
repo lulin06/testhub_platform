@@ -183,6 +183,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, View, Edit, Delete, VideoPlay, Clock, Upload } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 
 import {
   getUiProjects,
@@ -211,6 +212,7 @@ const { t } = useI18n()
 // 响应式数据
 const projects = ref([])
 const selectedProject = ref('')
+useRememberedProject(selectedProject, projects)
 const scripts = ref([])
 const currentPage = ref(1)
 const pageSize = ref(20)
@@ -732,7 +734,7 @@ onMounted(async () => {
   await loadProjects()
 
   if (projects.value.length > 0) {
-    selectedProject.value = projects.value[0].id
+    selectedProject.value = getPreferredProjectId(projects.value, projects.value[0].id)
     await loadScripts()
   }
 })

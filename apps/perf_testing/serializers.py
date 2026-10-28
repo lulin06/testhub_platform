@@ -204,6 +204,7 @@ class PerfProjectSerializer(serializers.ModelSerializer):
     members = SimpleUserSerializer(many=True, read_only=True)
     member_ids = serializers.ListField(child=serializers.IntegerField(),
                                        write_only=True, required=False)
+    workspace_project_id = serializers.IntegerField(read_only=True, allow_null=True)
     scenario_count = serializers.SerializerMethodField()
     execution_count = serializers.SerializerMethodField()
 
@@ -211,7 +212,7 @@ class PerfProjectSerializer(serializers.ModelSerializer):
         model = PerfProject
         fields = ['id', 'name', 'description', 'status', 'default_env', 'owner',
                   'members', 'member_ids', 'scenario_count', 'execution_count',
-                  'created_at', 'updated_at']
+                  'workspace_project_id', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
 
     def get_scenario_count(self, obj):

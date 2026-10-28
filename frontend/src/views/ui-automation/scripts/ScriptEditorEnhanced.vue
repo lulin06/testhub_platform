@@ -200,6 +200,7 @@ import {
 } from '@element-plus/icons-vue'
 import RecordingWizard from './RecordingWizard.vue'
 import ScriptReplayDialog from './ScriptReplayDialog.vue'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 
 import {
   getUiProjects,
@@ -218,6 +219,7 @@ const route = useRoute()
 // 响应式数据
 const projects = ref([])
 const projectId = ref('')
+useRememberedProject(projectId, projects)
 const elementLibraryWidth = ref(300)
 const detailsPanelWidth = ref(350)
 const scriptContent = ref('')
@@ -679,7 +681,7 @@ onMounted(async () => {
       ElMessage.error(t('uiAutomation.scriptEditor.messages.loadScriptFailed'))
     }
   } else if (projects.value.length > 0) {
-    projectId.value = projects.value[0].id
+    projectId.value = getPreferredProjectId(projects.value, projects.value[0].id)
     await onProjectChange()
   }
 

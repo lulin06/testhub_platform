@@ -228,12 +228,14 @@ import {
   getLocatorStrategies
 } from '@/api/ui_automation'
 import { useI18n } from 'vue-i18n'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 
 const { t } = useI18n()
 
 // 项目和元素数据
 const projects = ref([])
 const projectId = ref('')
+useRememberedProject(projectId, projects)
 const elements = ref([])
 
 // 定位策略数据
@@ -591,7 +593,7 @@ onMounted(async () => {
 
   // 如果有项目，默认选择第一个
   if (projects.value.length > 0) {
-    projectId.value = projects.value[0].id
+    projectId.value = getPreferredProjectId(projects.value, projects.value[0].id)
     createForm.project = projectId.value
     await loadElements()
   }
