@@ -309,7 +309,8 @@ class PlaywrightTestEngine:
                 context_options['storage_state'] = state_path
             self.context = await self.browser.new_context(**context_options)
             self.page = await self.context.new_page()
-            if url and url != 'about:blank':
+            # clear 后由后续 navigate 步骤进入公开页面，避免回访受保护 URL 触发重定向循环。
+            if url and url != 'about:blank' and params.get('navigate_current', True):
                 await self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
             return '已切换到指定登录态' if state_path else '已清除登录态'
         raise ValueError('未知的登录态操作')
@@ -539,6 +540,13 @@ class PlaywrightTestEngine:
                     match_count = await locator.count()
                     if not match_count or not await locator.is_visible():
                         return True, f"✓ 可选点击目标 '{element_name}' 不存在或不可见，已跳过", None
+
+                # 保存类按钮在页面没有未提交变更时会保持 disabled；与同步
+                # 执行器一致，遵循源用例的 skip_if_disabled 语义并安全跳过。
+                if action_params.get('skip_if_disabled'):
+                    match_count = await locator.count()
+                    if match_count == 1 and not await locator.is_enabled():
+                        return True, f"✓ 点击目标 '{element_name}' 已禁用，无待保存变更，已跳过", None
 
                 if action_params.get('dispatch_click'):
                     # RTE decorators can swallow locator.click while still reporting success.

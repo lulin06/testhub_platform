@@ -216,6 +216,42 @@ def create_testcase_action(arguments: dict, user) -> dict:
     }
 
 
+def import_recorded_script_action(arguments: dict, user) -> dict:
+    """Persist a reviewed Playwright recording in an accessible UI project."""
+    from apps.ui_automation.recording_import import import_recorded_script
+    from apps.ui_automation.script_security import ScriptSecurityError
+
+    project_id = arguments.get('project_id')
+    project = accessible_ui_projects(user).filter(id=project_id).first()
+    if not project:
+        raise McpActionError(f'UI 项目 {project_id} 不存在或无权限')
+    try:
+        script, analysis = import_recorded_script(
+            project=project,
+            user=user,
+            content=arguments.get('content'),
+            name=arguments.get('name', ''),
+            start_url=arguments.get('start_url', ''),
+            browser=arguments.get('browser', 'chromium'),
+            device=arguments.get('device', ''),
+            save_storage=arguments.get('save_storage', False),
+            expected_content_hash=arguments.get('content_hash', ''),
+        )
+    except ScriptSecurityError as exc:
+        raise McpActionError(str(exc)) from exc
+    return {
+        'script_id': script.id,
+        'project_id': project.id,
+        'project_name': project.name,
+        'name': script.name,
+        'source': script.source,
+        'language': script.language,
+        'framework': script.framework,
+        'content_hash': analysis['content_hash'],
+        'locator_count': analysis['locator_count'],
+    }
+
+
 #: confirm 分发注册表：tool_name → (执行体, preview 构造函数)
 def build_preview(tool_name: str, arguments: dict, user) -> str:
     """构造 preview 文本；无法预览时给出通用描述。"""
@@ -239,6 +275,14 @@ def build_preview(tool_name: str, arguments: dict, user) -> str:
         if tool_name == 'confirm_create_testcase':
             data = arguments.get('data') or {}
             return f'将在项目 {arguments.get("project_id")} 创建测试用例「{data.get("title", "未命名")}」'
+        if tool_name == 'confirm_import_recorded_script':
+            from apps.ui_automation.models import UiProject
+            project = UiProject.objects.filter(id=arguments.get('project_id')).first()
+            name = str(arguments.get('name') or 'testhub_recorded.py')[:200]
+            content = arguments.get('content') or ''
+            return (f'将在 UI 项目「{project.name if project else arguments.get("project_id")}」'
+                    f'导入录制脚本「{name}」（{len(content.encode("utf-8"))} 字节，'
+                    f'内容摘要 {arguments.get("content_hash", "")[:12]}）')
     except Exception as exc:  # noqa: BLE001 - 预览失败不阻断流程
         logger.warning('构造 preview 失败 tool=%s: %s', tool_name, exc)
     return f'即将执行危险操作 {tool_name}'
@@ -249,4 +293,5 @@ ACTION_REGISTRY = {
     'confirm_run_ui_case': run_ui_case_action,
     'confirm_run_perf_scene': run_perf_scene_action,
     'confirm_create_testcase': create_testcase_action,
+    'confirm_import_recorded_script': import_recorded_script_action,
 }

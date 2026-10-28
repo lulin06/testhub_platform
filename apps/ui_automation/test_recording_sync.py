@@ -65,3 +65,29 @@ with sync_playwright() as playwright:
         with self.assertRaises(UnsupportedRecordingCode) as error:
             parse_recording('def run(playwright):\n    page.evaluate("alert(1)")\n')
         self.assertEqual(error.exception.line, 2)
+
+    def test_ignores_storage_state_export_from_recording(self):
+        source = '''def run(playwright):
+    context = playwright.chromium.launch().new_context()
+    page = context.new_page()
+    page.goto("https://example.test")
+    context.storage_state(path="storage_state.json")
+    context.close()
+'''
+
+        steps = parse_recording(source)
+
+        self.assertEqual([step['action_type'] for step in steps], ['navigate', 'storageState'])
+        self.assertEqual(steps[-1]['action_params'], {
+            'operation': 'save', 'mode': 'save_as', 'name': 'storage_state', 'storage_state_id': None,
+        })
+
+    def test_generates_storage_state_code_from_manual_action_params(self):
+        code = generate_code([{
+            'action_type': 'storageState',
+            'action_params': {
+                'operation': 'save', 'mode': 'save_as', 'name': 'logged-in', 'storage_state_id': None,
+            },
+        }])
+
+        self.assertIn("context.storage_state(path='logged-in.json')", code)

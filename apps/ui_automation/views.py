@@ -51,6 +51,7 @@ from .serializers import (
 from .operation_logger import log_operation
 from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 from .script_security import MAX_SCRIPT_BYTES, ScriptSecurityError, analyze_script
+from .recording_import import import_recorded_script
 from .recording_sync import UnsupportedRecordingCode, generate_code, parse_recording
 from .script_runner import start_script_execution, stop_script_execution
 
@@ -1107,32 +1108,19 @@ class TestScriptViewSet(viewsets.ModelViewSet):
         else:
             content = str(request.data.get('content') or '')
             default_name = 'testhub_recorded.py'
-        if not content.strip():
-            return Response({'error': '请上传或粘贴Python脚本'}, status=status.HTTP_400_BAD_REQUEST)
-
         try:
-            analysis = analyze_script(content)
+            script, analysis = import_recorded_script(
+                project=project,
+                user=user,
+                content=content,
+                name=request.data.get('name') or default_name,
+                start_url=request.data.get('start_url'),
+                browser=request.data.get('browser', 'chromium'),
+                device=request.data.get('device', ''),
+                save_storage=request.data.get('save_storage'),
+            )
         except (UnicodeDecodeError, ScriptSecurityError) as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-
-        name = str(request.data.get('name') or default_name).strip()[:200]
-        script = TestScript.objects.create(
-            project=project,
-            name=name or 'testhub_recorded.py',
-            script_type='CODE',
-            content=content,
-            language='python',
-            framework='playwright',
-            source='recorded',
-            start_url=str(request.data.get('start_url') or analysis.get('start_url') or '')[:500],
-            recording_config={
-                'browser': request.data.get('browser', 'chromium'),
-                'device': request.data.get('device', ''),
-                'save_storage': _request_bool(request.data.get('save_storage'), False),
-            },
-            analysis={key: value for key, value in analysis.items() if key != 'normalized_content'},
-        )
-        log_operation('create', 'script', script.id, script.name, request.user)
         payload = TestScriptSerializer(script, context={'request': request}).data
         payload['analysis'] = script.analysis
         return Response(payload, status=status.HTTP_201_CREATED)
@@ -1546,6 +1534,8 @@ class TestCaseViewSet(viewsets.ModelViewSet):
     queryset = TestCase.objects.all()
     serializer_class = TestCaseSerializer
     permission_classes = [IsAuthenticated]
+    # 测试用例列表需要支持前端按项目一次加载较大批量数据，同时保留分页上限保护。
+    pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
     ordering_fields = ['created_at', 'updated_at', 'name', 'priority', 'status']

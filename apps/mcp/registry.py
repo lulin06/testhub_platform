@@ -58,7 +58,7 @@ class ToolMeta:
 
 
 # --------------------------------------------------------------------- #
-# 工具登记（与 tools.ALL_TOOLS 一一对应，共 17 个）
+# 工具登记（与 tools.ALL_TOOLS 一一对应）
 # --------------------------------------------------------------------- #
 
 _TOOLS = [
@@ -220,6 +220,27 @@ _TOOLS = [
                     '返回 testcase_id。令牌一次性消费且 5 分钟内有效；'
                     '人工审批模式下返回 awaiting_approval，需轮询 get_approval_status。',
         read_only=False, idempotent=False, paired_with='preview_create_testcase',
+        examples=({'confirm_token': 'cf_xxxxxxxx'},),
+    ),
+    ToolMeta(
+        name='preview_import_recorded_script', title='预览导入录制脚本', category=CATEGORY_PREVIEW,
+        domain='ui-automation',
+        summary='预览导入 Python Playwright 录制脚本',
+        description='校验项目权限、脚本大小、Python 语法及脚本安全规则，返回导入摘要与 confirm_token（5 分钟有效）。'
+                    'content 为 UTF-8 Python Playwright 脚本文本，最大 2MB；本步骤不创建脚本。'
+                    '确认导入请调用 confirm_import_recorded_script；人工审批模式下还需轮询 get_approval_status。',
+        read_only=False, idempotent=False, paired_with='confirm_import_recorded_script',
+        examples=({'project_id': 3,
+                   'content': 'from playwright.sync_api import sync_playwright\n'},),
+    ),
+    ToolMeta(
+        name='confirm_import_recorded_script', title='确认导入录制脚本', category=CATEGORY_CONFIRM,
+        domain='ui-automation',
+        summary='确认创建 UI 自动化录制脚本',
+        description='校验 preview_import_recorded_script 返回的 confirm_token 后创建 Python Playwright 录制脚本，'
+                    '返回脚本 ID 与内容摘要。令牌一次性消费且 5 分钟内有效；'
+                    '人工审批模式下返回 awaiting_approval，需轮询 get_approval_status。',
+        read_only=False, idempotent=False, paired_with='preview_import_recorded_script',
         examples=({'confirm_token': 'cf_xxxxxxxx'},),
     ),
 
