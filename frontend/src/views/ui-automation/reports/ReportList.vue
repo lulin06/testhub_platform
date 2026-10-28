@@ -293,6 +293,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Document, Delete, WarningFilled } from '@element-plus/icons-vue'
 import {
@@ -306,6 +307,7 @@ const { t } = useI18n()
 const reports = ref([])
 const projects = ref([])
 const selectedProject = ref('')
+useRememberedProject(selectedProject, projects)
 const loading = ref(false)
 const total = ref(0)
 const pagination = reactive({
@@ -509,7 +511,7 @@ const formatDuration = (seconds) => {
 onMounted(async () => {
   await loadProjects()
   if (projects.value.length > 0) {
-    selectedProject.value = projects.value[0].id
+    selectedProject.value = getPreferredProjectId(projects.value, projects.value[0].id)
   }
   await loadReports()
 })

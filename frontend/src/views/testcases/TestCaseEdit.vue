@@ -155,6 +155,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import api from '@/utils/api'
 import RichTextEditor from '@/components/RichTextEditor.vue'
+import { rememberSelectedProject } from '@/utils/projectSelection'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -234,6 +235,7 @@ const fetchProjectVersions = async (projectId) => {
 }
 
 const onProjectChange = (projectId) => {
+  rememberSelectedProject(projectId, projects.value)
   form.version_ids = []
   form.maintainer_id = null
   form.module_id = null

@@ -147,6 +147,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import api from '@/utils/api'
 import RichTextEditor from '@/components/RichTextEditor.vue'
+import { getPreferredProjectId, rememberSelectedProject } from '@/utils/projectSelection'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -211,6 +212,7 @@ const fetchProjectVersions = async (projectId) => {
 }
 
 const onProjectChange = (projectId) => {
+  rememberSelectedProject(projectId, projects.value)
   form.version_ids = []
   form.maintainer_id = null
   form.module_id = null
@@ -266,6 +268,7 @@ const handleSubmit = async () => {
 
 onMounted(async () => {
   await fetchProjects()
-  if (form.project_id) await fetchModules(form.project_id)
+  form.project_id = getPreferredProjectId(projects.value)
+  if (form.project_id) onProjectChange(form.project_id)
 })
 </script>

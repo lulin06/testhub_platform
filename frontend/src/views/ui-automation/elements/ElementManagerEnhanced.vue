@@ -295,6 +295,7 @@
 <script setup>
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -326,6 +327,7 @@ const sidebarWidth = ref(300)
 // 响应式数据
 const projects = ref([])
 const selectedProject = ref('')
+useRememberedProject(selectedProject, projects)
 const pages = ref([])
 const locatorStrategies = ref([])
 const treeData = ref([])
@@ -511,8 +513,9 @@ onMounted(async () => {
   console.log('定位策略:', locatorStrategies.value.length)
 
   if (projects.value.length > 0) {
-    console.log('设置初始项目为:', projects.value[0].id)
-    selectedProject.value = projects.value[0].id
+    const preferredProjectId = getPreferredProjectId(projects.value, projects.value[0].id)
+    console.log('设置初始项目为:', preferredProjectId)
+    selectedProject.value = preferredProjectId
     await onProjectChange()
     console.log('onProjectChange完成')
   }

@@ -187,6 +187,7 @@ import { useI18n } from 'vue-i18n'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 import EnvironmentTable from './components/EnvironmentTable.vue'
+import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 
 const { t } = useI18n()
 const activeTab = ref('GLOBAL')
@@ -194,6 +195,7 @@ const globalEnvironments = ref([])
 const localEnvironments = ref([])
 const projects = ref([])
 const selectedProject = ref(null)
+useRememberedProject(selectedProject, projects)
 const loading = ref(false)
 const showCreateDialog = ref(false)
 const showViewDialog = ref(false)
@@ -252,7 +254,7 @@ const loadProjects = async () => {
     const response = await api.get('/api-testing/projects/')
     projects.value = response.data.results || response.data
     if (projects.value.length > 0 && !selectedProject.value) {
-      selectedProject.value = projects.value[0].id
+      selectedProject.value = getPreferredProjectId(projects.value, projects.value[0].id)
     }
   } catch (error) {
     ElMessage.error(t('apiTesting.messages.error.projectListLoadFailed'))

@@ -33,6 +33,7 @@ class ApiProjectSerializer(serializers.ModelSerializer):
     owner = UserSerializer(read_only=True)
     members = UserSerializer(many=True, read_only=True)
     member_ids = serializers.ListField(child=serializers.IntegerField(), write_only=True, required=False)
+    workspace_project_id = serializers.IntegerField(read_only=True, allow_null=True)
     start_date = NullableDateField(required=False, allow_null=True)
     end_date = NullableDateField(required=False, allow_null=True)
 
@@ -41,7 +42,7 @@ class ApiProjectSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'project_type', 'status',
             'owner', 'members', 'member_ids', 'start_date', 'end_date',
-            'created_at', 'updated_at'
+            'workspace_project_id', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at', 'workspace_project', 'is_deleted', 'deleted_at', 'deleted_by']
 
