@@ -335,8 +335,7 @@ const handleNavigate = (type) => {
         card_type: type
       }
     })
-    const routeData = router.resolve({ path: routes[type] })
-    window.open(routeData.href, '_blank')
+    router.push(routes[type])
   }
 }
 </script>

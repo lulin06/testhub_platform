@@ -11,10 +11,12 @@ from django.test import TestCase, override_settings
 
 from apps.mcp.confirm import approve_pending
 from apps.mcp.models import McpCallLog, McpPendingConfirm
+from apps.mcp.serializers import McpPendingConfirmSerializer
 from apps.mcp.tests.utils import FakeContext, ctx_with_jwt
 from apps.mcp import tools as mcp_tools
 from apps.projects.models import Project
 from apps.testcases.models import TestCase as FunctionalTestCase
+from apps.ui_automation.models import UiProject, TestScript
 
 from mcp.server.fastmcp.exceptions import ToolError
 
@@ -116,6 +118,38 @@ class PreviewConfirmToolTest(ToolBase):
     def test_confirm_with_invalid_token_raises(self):
         with self.assertRaises(ToolError):
             mcp_tools.confirm_run_api_suite(self.ctx, confirm_token='bad-token')
+
+    def test_preview_and_confirm_import_recorded_script(self):
+        ui_project = UiProject.objects.create(
+            name='MCP UI 项目', base_url='https://example.com', owner=self.user)
+        content = (
+            'from playwright.sync_api import sync_playwright\n'
+            'with sync_playwright() as p:\n'
+            '    browser = p.chromium.launch()\n'
+            '    page = browser.new_page()\n'
+            '    page.goto("https://example.com")\n'
+        )
+        preview = mcp_tools.preview_import_recorded_script(
+            self.ctx, project_id=ui_project.id, content=content, name='recorded.py')
+        self.assertIn('confirm_token', preview)
+        self.assertNotIn(content, preview['preview'])
+        result = mcp_tools.confirm_import_recorded_script(self.ctx, preview['confirm_token'])
+        self.assertTrue(TestScript.objects.filter(id=result['script_id'], project=ui_project).exists())
+        log = McpCallLog.objects.filter(tool_name='preview_import_recorded_script').first()
+        self.assertIsNotNone(log)
+        self.assertNotIn('page.goto', log.args_brief)
+        pending = McpPendingConfirm.objects.filter(
+            tool_name='confirm_import_recorded_script').first()
+        safe_args = McpPendingConfirmSerializer(pending).data['arguments']
+        self.assertNotIn('content', safe_args)
+        self.assertEqual(safe_args['content_summary']['sha256'], result['content_hash'])
+
+    def test_import_recorded_script_requires_project_access(self):
+        ui_project = UiProject.objects.create(
+            name='Other UI 项目', base_url='https://example.com', owner=self.other)
+        with self.assertRaises(ToolError):
+            mcp_tools.preview_import_recorded_script(
+                self.ctx, project_id=ui_project.id, content='print("unsafe")')
 
 
 class ArgsBriefMaskingTest(ToolBase):

@@ -1,12 +1,15 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
+from rest_framework.test import APIClient
 
-from apps.ui_automation.playwright_engine import PlaywrightTestEngine
-from apps.ui_automation.serializers import TestCaseStepSerializer
+from apps.ui_automation.playwright_engine import PlaywrightTestEngine, build_playwright_locator
+from apps.ui_automation.models import Element, LocatorStrategy, TestCase as UiTestCase, UiProject
+from apps.ui_automation.serializers import ElementSerializer, TestCaseStepSerializer
 from apps.ui_automation.test_executor import TestExecutor
 from apps.ui_automation.variable_context import UiVariableContext
+from django.contrib.auth import get_user_model
 
 
 class PearMigrationAsyncEngineTests(SimpleTestCase):
@@ -22,13 +25,19 @@ class PearMigrationAsyncEngineTests(SimpleTestCase):
         self.locator.check = AsyncMock()
         self.locator.uncheck = AsyncMock()
         self.locator.get_attribute = AsyncMock()
+        self.locator.count = AsyncMock(return_value=0)
+        self.locator.is_visible = AsyncMock(return_value=False)
+        self.locator.click = AsyncMock()
+        self.locator.evaluate = AsyncMock()
 
-    async def run_step(self, action_type, *, input_value='', assert_type='', assert_value='', element=None):
+    async def run_step(self, action_type, *, input_value='', assert_type='', assert_value='', element=None,
+                       action_params=None):
         step = SimpleNamespace(
             action_type=action_type,
             input_value=input_value,
             assert_value=assert_value,
             assert_type=assert_type,
+            action_params=action_params or {},
             wait_time=1000,
         )
         element = element or {
@@ -61,6 +70,45 @@ class PearMigrationAsyncEngineTests(SimpleTestCase):
                     operation.assert_awaited_once_with(value='active', timeout=1000)
                 else:
                     operation.assert_awaited_once_with(timeout=1000, force=False)
+
+    async def test_optional_click_skips_missing_target(self):
+        success, log, _ = await self.run_step('click', action_params={'optional': True})
+
+        self.assertTrue(success, log)
+        self.assertIn('已跳过', log)
+        self.locator.click.assert_not_awaited()
+
+    async def test_optional_click_uses_target_when_visible(self):
+        self.locator.count.return_value = 1
+        self.locator.is_visible.return_value = True
+
+        success, log, _ = await self.run_step('click', action_params={'optional': True})
+
+        self.assertTrue(success, log)
+        self.locator.click.assert_awaited_once_with(timeout=1000, force=False)
+
+    async def test_dispatch_click_sends_mouse_event_sequence(self):
+        success, log, _ = await self.run_step('click', action_params={'dispatch_click': True})
+
+        self.assertTrue(success, log)
+        self.assertIn('分发鼠标事件', log)
+        self.locator.evaluate.assert_awaited_once()
+        self.locator.click.assert_not_awaited()
+
+    async def test_url_contains_waits_for_navigation(self):
+        self.engine.page.url = 'https://example.test/checkout'
+
+        async def complete_navigation(_delay):
+            self.engine.page.url = 'https://example.test/order/123'
+
+        with patch('apps.ui_automation.playwright_engine.asyncio.sleep',
+                   new_callable=AsyncMock, side_effect=complete_navigation):
+            success, log, _ = await self.run_step(
+                'assert', assert_type='urlContains', assert_value='order'
+            )
+
+        self.assertTrue(success, log)
+        self.assertIn('URL包含', log)
 
     async def test_has_attribute_checks_presence_exact_value_and_missing_attributes(self):
         cases = (
@@ -165,3 +213,137 @@ class PearMigrationSerializerTests(SimpleTestCase):
         help_text = TestCaseStepSerializer().fields['assert_value'].help_text
 
         self.assertIn('属性名=期望值', help_text)
+
+    def test_custom_shop_add_locator_keeps_pear_disambiguation(self):
+        """Pear 的 +Add 自定义动作必须保留 CSS 过滤和首个匹配语义。"""
+        page = MagicMock()
+        locator = MagicMock()
+        page.locator.return_value = locator
+
+        result = build_playwright_locator(
+            page,
+            'css',
+            'button[data-testid="enhance-button"]:has([data-testid="AddLineIcon"]):has-text("Add")',
+            {'first': True},
+        )
+
+        page.locator.assert_called_once_with(
+            'button[data-testid="enhance-button"]:has([data-testid="AddLineIcon"]):has-text("Add")'
+        )
+        self.assertIs(result, locator.first)
+
+
+class ElementPageGroupingTests(TestCase):
+    """确保 API 创建元素时页面字段会同步到元素分组。"""
+
+    def setUp(self):
+        user = get_user_model().objects.create_user(username='element-group-user', password='test-pass-123')
+        self.project = UiProject.objects.create(
+            name='Element grouping test project',
+            base_url='https://example.test',
+            owner=user,
+        )
+        self.strategy = LocatorStrategy.objects.create(name='role')
+
+    def _serializer(self, **overrides):
+        data = {
+            'project_id': self.project.id,
+            'name': 'add-button',
+            'element_type': 'BUTTON',
+            'page': 'Storefront',
+            'locator_strategy_id': self.strategy.id,
+            'locator_value': 'button',
+            'locator_options': {'name': 'Add'},
+        }
+        data.update(overrides)
+        serializer = ElementSerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        return serializer
+
+    def test_create_page_without_group_creates_and_links_top_level_group(self):
+        element = self._serializer().save()
+
+        self.assertIsNotNone(element.group_id)
+        self.assertEqual(element.group.name, 'Storefront')
+        self.assertEqual(element.group.project_id, self.project.id)
+
+    def test_update_page_without_group_moves_element_to_new_page_group(self):
+        element = self._serializer().save()
+        serializer = ElementSerializer(
+            element,
+            data={'page': 'Checkout'},
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        element = serializer.save()
+
+        self.assertEqual(element.page, 'Checkout')
+        self.assertEqual(element.group.name, 'Checkout')
+
+    def test_create_with_explicit_null_group_keeps_element_unassigned(self):
+        element = self._serializer(group_id=None).save()
+
+        self.assertIsNone(element.group_id)
+    def test_update_with_explicit_null_group_clears_existing_group(self):
+        element = self._serializer().save()
+        serializer = ElementSerializer(
+            element,
+            data={'group_id': None},
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        element = serializer.save()
+
+        self.assertIsNone(element.group_id)
+
+
+class TestCaseStepApiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username='step-api-user', password='test-pass-123')
+        self.project = UiProject.objects.create(
+            name='Step API project', base_url='https://example.test', owner=self.user
+        )
+        self.test_case = UiTestCase.objects.create(
+            name='API-created step case', project=self.project, created_by=self.user
+        )
+        self.strategy = LocatorStrategy.objects.create(name='css')
+        self.element = Element.objects.create(
+            project=self.project,
+            name='target',
+            locator_strategy=self.strategy,
+            locator_value='#target',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_create_step_through_api_assigns_accessible_test_case(self):
+        response = self.client.post('/api/ui-automation/test-case-steps/', {
+            'test_case': self.test_case.id,
+            'step_number': 1,
+            'action_type': 'click',
+            'element': self.element.id,
+            'wait_time': 1000,
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['element'], self.element.id)
+        self.assertTrue(self.test_case.steps.filter(step_number=1, element=self.element).exists())
+
+    def test_create_step_cannot_target_another_users_test_case(self):
+        other_user = get_user_model().objects.create_user(username='other-step-user', password='test-pass-123')
+        other_project = UiProject.objects.create(
+            name='Other step project', base_url='https://other.example', owner=other_user
+        )
+        other_case = UiTestCase.objects.create(
+            name='Private case', project=other_project, created_by=other_user
+        )
+
+        response = self.client.post('/api/ui-automation/test-case-steps/', {
+            'test_case': other_case.id,
+            'step_number': 1,
+            'action_type': 'wait',
+            'wait_time': 1000,
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(other_case.steps.exists())

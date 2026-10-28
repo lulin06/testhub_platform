@@ -1492,7 +1492,8 @@ class TestExecutor:
                 user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
             )
             self.current_page = self.context.new_page()
-            if url and url != 'about:blank':
+            # clear 后由后续 navigate 步骤进入公开页面，避免回访受保护 URL 触发重定向循环。
+            if url and url != 'about:blank' and params.get('navigate_current', True):
                 self.current_page.goto(url, wait_until='domcontentloaded', timeout=30000)
             return
         raise ValueError('未知的登录态操作')

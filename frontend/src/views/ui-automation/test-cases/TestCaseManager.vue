@@ -571,8 +571,18 @@ const loadTestCases = async () => {
   }
 
   try {
-    const response = await getTestCases({ project: projectId.value })
-    testCases.value = response.data.results || response.data
+    // 列表接口按页返回，逐页读取避免项目用例超过单页数量时被截断。
+    const cases = []
+    let page = 1
+    let hasNext = true
+    while (hasNext) {
+      const response = await getTestCases({ project: projectId.value, page, page_size: 1000 })
+      const pageCases = response.data.results || response.data
+      cases.push(...pageCases)
+      hasNext = Boolean(response.data.next)
+      page += 1
+    }
+    testCases.value = cases
   } catch (error) {
     console.error('获取测试用例失败:', error)
   }

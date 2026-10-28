@@ -96,7 +96,7 @@ def _log_call(user, tool_name: str, arguments: dict, started: float,
             user=user if user and getattr(user, 'pk', None) else None,
             tool_name=tool_name[:100],
             args_digest=args_digest(arguments or {}),
-            args_brief=act.mask_sensitive_args(arguments or {}),
+            args_brief=act.mask_sensitive_args(_audit_arguments(tool_name, arguments or {})),
             client_name=client_name[:100],
             status=status,
             duration_ms=int((time.perf_counter() - started) * 1000),
@@ -113,6 +113,20 @@ def _log_call(user, tool_name: str, arguments: dict, started: float,
             cache.set('mcp:log_cleanup_at', '1', 3600)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _audit_arguments(tool_name: str, arguments: dict) -> dict:
+    """Keep imported source out of MCP call-log details while retaining its digest."""
+    if tool_name not in {'preview_import_recorded_script', 'confirm_import_recorded_script'}:
+        return arguments
+    safe = dict(arguments)
+    content = safe.pop('content', None)
+    if content is not None:
+        safe['content_bytes'] = len(content.encode('utf-8')) if isinstance(content, str) else 0
+    if 'start_url' in safe:
+        safe.pop('start_url')
+        safe['has_start_url'] = True
+    return safe
 
 
 def _run_tool(ctx: Context, tool_name: str, arguments: dict, fn):
@@ -443,6 +457,43 @@ def preview_create_testcase(ctx: Context, project_id: int, data: dict) -> dict:
                      lambda user: create_preview('confirm_create_testcase', arguments, user))
 
 
+def preview_import_recorded_script(ctx: Context, project_id: int, content: str,
+                                   name: str = '', start_url: str = '',
+                                   browser: str = 'chromium', device: str = '',
+                                   save_storage: bool = False) -> dict:
+    """Validate a Playwright recording and preview importing it to a UI project."""
+    from apps.ui_automation.recording_import import analyze_recorded_script
+    from apps.ui_automation.script_security import ScriptSecurityError
+
+    arguments = {
+        'project_id': project_id,
+        'content': content,
+        'name': name,
+        'start_url': start_url,
+        'browser': browser,
+        'device': device,
+        'save_storage': save_storage,
+    }
+
+    def run(user):
+        if not act.accessible_ui_projects(user).filter(id=project_id).exists():
+            raise ToolError(f'UI 项目 {project_id} 不存在或无权限')
+        try:
+            analysis = analyze_recorded_script(content)
+        except ScriptSecurityError as exc:
+            raise act.McpActionError(str(exc)) from exc
+        arguments['content_hash'] = analysis['content_hash']
+        return create_preview('confirm_import_recorded_script', arguments, user)
+
+    return _run_tool(ctx, 'preview_import_recorded_script', arguments, run)
+
+
+def confirm_import_recorded_script(ctx: Context, confirm_token: str) -> dict:
+    """Confirm importing a reviewed Playwright recording into its UI project."""
+    return _run_tool(ctx, 'confirm_import_recorded_script', {'confirm_token': '<token>'},
+                     lambda user: consume_pending(verify_pending(confirm_token, user), user))
+
+
 def confirm_create_testcase(ctx: Context, confirm_token: str) -> dict:
     """确认创建功能测试用例（危险操作第二步）。
 
@@ -532,5 +583,6 @@ ALL_TOOLS = [
     preview_run_ui_case, confirm_run_ui_case,
     preview_run_perf_scene, confirm_run_perf_scene,
     preview_create_testcase, confirm_create_testcase,
+    preview_import_recorded_script, confirm_import_recorded_script,
     get_approval_status,
 ]
