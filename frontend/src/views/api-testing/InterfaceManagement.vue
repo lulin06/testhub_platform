@@ -130,7 +130,7 @@
           </el-empty>
         </div>
 
-        <div v-else class="request-detail">
+        <div v-else class="request-detail request-editor-card">
           <!-- 请求基本信息 -->
           <div class="request-header">
             <div class="request-line">
@@ -318,6 +318,85 @@
 
             <!-- HTTP接口专用标签页 -->
             <template v-if="!selectedRequest || selectedRequest.request_type !== 'WEBSOCKET'">
+              <el-tab-pane label="Cookies" name="cookies">
+                <div class="cookies-editor">
+                  <div v-if="!selectedRequest.cookies || selectedRequest.cookies.length === 0" class="empty-tip">暂无 Cookie，点下方添加</div>
+                  <div v-for="(c, i) in selectedRequest.cookies" :key="i" class="kv-row">
+                    <el-input v-model="c.key" placeholder="名称" size="small" style="width:200px" />
+                    <el-input v-model="c.value" placeholder="值" size="small" style="flex:1" />
+                    <el-button size="small" type="danger" circle @click="selectedRequest.cookies.splice(i,1)"><el-icon><Delete /></el-icon></el-button>
+                  </div>
+                  <el-button size="small" @click="selectedRequest.cookies.push({key:'',value:''})"><el-icon><Plus /></el-icon> 添加 Cookie</el-button>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="Auth" name="auth">
+                <div class="auth-editor">
+                  <el-select v-model="selectedRequest.auth.type" placeholder="认证类型" size="small" style="width:200px">
+                    <el-option label="No Auth" value="none" />
+                    <el-option label="Bearer Token" value="bearer" />
+                    <el-option label="Basic Auth" value="basic" />
+                    <el-option label="API Key" value="apikey" />
+                  </el-select>
+                  <el-input v-if="selectedRequest.auth.type==='bearer'" v-model="selectedRequest.auth.token" placeholder="Token" size="small" style="margin-top:8px" />
+                  <template v-if="selectedRequest.auth.type==='basic'">
+                    <el-input v-model="selectedRequest.auth.username" placeholder="用户名" size="small" style="margin-top:8px" />
+                    <el-input v-model="selectedRequest.auth.password" placeholder="密码" type="password" size="small" style="margin-top:8px" />
+                  </template>
+                  <template v-if="selectedRequest.auth.type==='apikey'">
+                    <el-input v-model="selectedRequest.auth.key" placeholder="Key" size="small" style="margin-top:8px" />
+                    <el-input v-model="selectedRequest.auth.value" placeholder="Value" size="small" style="margin-top:8px" />
+                  </template>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="前置操作" name="pre-actions">
+                <div class="actions-editor">
+                  <div v-if="!selectedRequest.pre_actions || selectedRequest.pre_actions.length===0" class="empty-tip">暂无前置操作</div>
+                  <div v-for="(a,i) in selectedRequest.pre_actions" :key="i" class="action-row">
+                    <el-select v-model="a.type" size="small" style="width:160px">
+                      <el-option label="变量提取" value="extract" />
+                      <el-option label="休眠(ms)" value="sleep" />
+                      <el-option label="自定义脚本" value="script" />
+                    </el-select>
+                    <el-input v-model="a.value" placeholder="参数" size="small" style="flex:1" />
+                    <el-button size="small" type="danger" circle @click="selectedRequest.pre_actions.splice(i,1)"><el-icon><Delete /></el-icon></el-button>
+                  </div>
+                  <el-button size="small" @click="selectedRequest.pre_actions.push({type:'extract',value:''})"><el-icon><Plus /></el-icon> 添加前置操作</el-button>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="后置操作" name="post-actions">
+                <div class="actions-editor">
+                  <div v-if="!selectedRequest.post_actions || selectedRequest.post_actions.length===0" class="empty-tip">暂无后置操作</div>
+                  <div v-for="(a,i) in selectedRequest.post_actions" :key="i" class="action-row">
+                    <el-select v-model="a.type" size="small" style="width:160px">
+                      <el-option label="变量提取" value="extract" />
+                      <el-option label="断言" value="assert" />
+                    </el-select>
+                    <el-input v-model="a.value" placeholder="参数" size="small" style="flex:1" />
+                    <el-button size="small" type="danger" circle @click="selectedRequest.post_actions.splice(i,1)"><el-icon><Delete /></el-icon></el-button>
+                  </div>
+                  <el-button size="small" @click="selectedRequest.post_actions.push({type:'extract',value:''})"><el-icon><Plus /></el-icon> 添加后置操作</el-button>
+                </div>
+              </el-tab-pane>
+
+              <el-tab-pane label="设置" name="settings">
+                <div class="settings-editor">
+                  <el-form label-width="120px" size="small">
+                    <el-form-item label="请求超时(ms)">
+                      <el-input-number v-model="selectedRequest.settings.timeout" :min="100" :step="500" />
+                    </el-form-item>
+                    <el-form-item label="跟随重定向">
+                      <el-switch v-model="selectedRequest.settings.follow_redirects" />
+                    </el-form-item>
+                    <el-form-item label="忽略环境">
+                      <el-switch v-model="selectedRequest.settings.ignore_env" />
+                    </el-form-item>
+                  </el-form>
+                </div>
+              </el-tab-pane>
+
               <el-tab-pane label="Pre-request Script" name="pre-script">
                 <div class="script-editor-container">
                   <el-input
@@ -1212,8 +1291,21 @@ const loadRequests = async () => {
   if (!selectedProject.value) return
 
   try {
-    const response = await api.get('/api-testing/requests/')
-    const requests = response.data.results || response.data || []
+    // 后端默认分页只返回 20 条，这里拉全量（分页循环），把所有接口挂到集合树上
+    let requests = []
+    let url = '/api-testing/requests/'
+    while (url) {
+      const response = await api.get(url)
+      const data = response.data.results || response.data || []
+      requests = requests.concat(data)
+      let next = response.data.next || null
+      if (next) {
+        // next 形如 http://host/api/api-testing/requests/?page=2；
+        // axios baseURL 已是 /api，需剥掉 origin 和开头的 /api，得到 /api-testing/requests/?page=2
+        next = next.replace(/^https?:\/\/[^/]+/, '').replace(/^\/api/, '')
+      }
+      url = next
+    }
 
     // 清空所有集合的子节点（请求）
     collections.value.forEach(collection => {
@@ -1335,6 +1427,11 @@ const onNodeClick = async (data) => {
       }
 
       response.value = null
+      requestData.cookies = requestData.cookies || []
+      requestData.pre_actions = requestData.pre_actions || []
+      requestData.post_actions = requestData.post_actions || []
+      requestData.settings = requestData.settings || {}
+      requestData.auth = requestData.auth || {}
       selectedRequest.value = requestData
     } catch (error) {
       ElMessage.error('加载请求失败')
@@ -4474,4 +4571,36 @@ const useLocalVariableCategories = () => {
   color: white !important;
 }
 
+.kv-row, .action-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.empty-tip { color: #909399; padding: 16px; text-align: center; border: 1px dashed #dcdfe6; border-radius: 4px; margin-bottom: 8px; }
+.cookies-editor, .auth-editor, .actions-editor, .settings-editor { padding: 12px; }
+
+/* Apifox-style polish */
+.request-editor-card {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  padding: 16px;
+}
+.request-editor-card :deep(.el-tabs__item) {
+  font-size: 13px;
+  color: #606266;
+  height: 36px;
+  line-height: 36px;
+}
+.request-editor-card :deep(.el-tabs__item.is-active) { color: #6366f1; font-weight: 500; }
+.request-editor-card :deep(.el-tabs__active-bar) { background-color: #6366f1; }
+.request-editor-card :deep(.el-tabs__nav-wrap::after) { height: 1px; background: #f0f0f0; }
+.send-button {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+  border: none !important;
+  border-radius: 6px !important;
+  font-weight: 500;
+}
+.method-select :deep(.el-input__wrapper) {
+  border-radius: 6px 0 0 6px !important;
+  font-weight: 600;
+}
+.url-input :deep(.el-input__wrapper) { border-radius: 0 6px 6px 0 !important; }
 </style>

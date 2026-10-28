@@ -226,6 +226,11 @@ const routes = [
                 component: ApiAutomationTesting
             },
             {
+                path: 'test-sets',
+                name: 'ApiTestSets',
+                component: () => import('@/views/api-testing/TestSets.vue')
+            },
+            {
                 path: 'history',
                 name: 'ApiHistory',
                 component: ApiRequestHistory

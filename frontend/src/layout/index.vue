@@ -72,6 +72,10 @@
               <el-icon><VideoPlay /></el-icon>
               <span>{{ $t('menu.automationTesting') }}</span>
             </el-menu-item>
+            <el-menu-item index="/api-testing/test-sets">
+              <el-icon><Files /></el-icon>
+              <span>测试套件</span>
+            </el-menu-item>
             <el-menu-item index="/api-testing/history">
               <el-icon><Timer /></el-icon>
               <span>{{ $t('menu.requestHistory') }}</span>
@@ -444,7 +448,7 @@ import {
   Monitor, Folder, Document, Flag, Check, Collection, VideoPlay,
   DataAnalysis, ChatDotRound, DocumentCopy, Link, MagicStick,
   Odometer, Timer, Setting, AlarmClock, Bell, Aim, Edit, Cpu, ArrowDown, Cellphone, Connection, FolderOpened, Tickets, Plus,
-  SetUp, TrendCharts
+  SetUp, TrendCharts, Files
 } from '@element-plus/icons-vue'
 import logoSvg from '@/assets/images/logo.svg'
 import logoHomePng from '@/assets/images/logo_home.png'
