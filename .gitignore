@@ -29,6 +29,9 @@ static_files/img/
 media/allure-static/*
 !media/allure-static/.gitkeep
 
+#忽略UI自动化登录态的文件
+media/ui-automation/storage-states/*
+
 # 忽略 AI 录屏文件，但保留.gitkeep
 media/ai_recording/*
 !media/ai_recording/.gitkeep
