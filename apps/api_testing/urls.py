@@ -9,7 +9,7 @@ from .views import (
     ScheduledTaskViewSet, TaskExecutionLogViewSet, NotificationLogViewSet,
     TaskNotificationSettingViewSet, OperationLogViewSet,
     ApiDashboardViewSet, AIServiceConfigViewSet,
-    TestSetViewSet
+    TestSetViewSet, TestSuiteFolderViewSet
 )
 
 router = DefaultRouter()
@@ -20,6 +20,7 @@ router.register(r'requests', ApiRequestViewSet)
 router.register(r'environments', EnvironmentViewSet)
 router.register(r'histories', RequestHistoryViewSet)
 router.register(r'test-suites', TestSuiteViewSet)
+router.register(r'test-suite-folders', TestSuiteFolderViewSet, basename='test-suite-folder')
 router.register(r'test-sets', TestSetViewSet, basename='testset')
 router.register(r'test-suite-requests', TestSuiteRequestViewSet)
 router.register(r'test-executions', TestExecutionViewSet)

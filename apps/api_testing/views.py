@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status
+from rest_framework import serializers
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -24,7 +25,7 @@ from datetime import datetime, timedelta
 
 from .models import (
     ApiProject, ApiCollection, ApiRequest, Environment,
-    RequestHistory, TestSuite, TestExecution, TestSuiteRequest,
+    RequestHistory, TestSuite, TestSuiteFolder, TestExecution, TestSuiteRequest,
     ScheduledTask, TaskExecutionLog, NotificationLog,
     TaskNotificationSetting, OperationLog, AIServiceConfig,
     TestSet, TestSetItem,
@@ -34,7 +35,7 @@ from .serializers import (
     ApiProjectSerializer, ApiCollectionSerializer, ApiRequestSerializer,
     ApiCollectionTreeSerializer, ApiRequestTreeSerializer,
     EnvironmentSerializer, RequestHistorySerializer, TestSuiteSerializer,
-    TestSuiteRequestSerializer, TestExecutionSerializer, UserSerializer,
+    TestSuiteRequestSerializer, TestSuiteFolderSerializer, TestExecutionSerializer, UserSerializer,
     ScheduledTaskSerializer, TaskExecutionLogSerializer,
     NotificationLogSerializer, TaskNotificationSettingSerializer,
     NotificationLogDetailSerializer,
@@ -747,6 +748,92 @@ class RequestHistoryViewSet(viewsets.ModelViewSet):
         return Response({'message': f'成功删除 {deleted_count} 条记录'})
 
 
+def _ensure_test_suite_folder_paths(project, path, include_leaf=True):
+    parts = path.split('/')
+    stop = len(parts) if include_leaf else len(parts) - 1
+    for index in range(1, stop + 1):
+        folder_path = '/'.join(parts[:index])
+        TestSuiteFolder.objects.get_or_create(project=project, path=folder_path)
+
+
+class TestSuiteFolderViewSet(viewsets.ModelViewSet):
+    serializer_class = TestSuiteFolderSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = TestSuiteFolder.objects.filter(
+            project__in=ApiProject.objects.filter(models.Q(owner=user) | models.Q(members=user))
+        ).distinct()
+        project_id = self.request.query_params.get('project')
+        return queryset.filter(project_id=project_id) if project_id else queryset
+
+    def _ensure_parent_folders(self, project, path):
+        _ensure_test_suite_folder_paths(project, path, include_leaf=False)
+
+    def perform_create(self, serializer):
+        path = serializer.validated_data['path'].strip('/')
+        if not path or any(not part.strip() for part in path.split('/')):
+            raise serializers.ValidationError({'path': '文件夹名称和路径不能为空'})
+        project = serializer.validated_data['project']
+        if not ApiProject.objects.filter(
+            pk=project.pk,
+        ).filter(models.Q(owner=self.request.user) | models.Q(members=self.request.user)).exists():
+            raise Http404
+        self._ensure_parent_folders(project, path)
+        serializer.save(path=path)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        folder = self.get_object()
+        if serializer.validated_data.get('project', folder.project) != folder.project:
+            raise serializers.ValidationError({'project': '文件夹不能移动到其他项目'})
+        old_path = folder.path
+        new_path = serializer.validated_data.get('path', old_path).strip('/')
+        if not new_path or any(not part.strip() for part in new_path.split('/')):
+            raise serializers.ValidationError({'path': '文件夹名称和路径不能为空'})
+        if new_path.startswith(old_path + '/'):
+            raise serializers.ValidationError({'path': '不能将文件夹移动到自身子目录中'})
+
+        affected = list(self.get_queryset().filter(project=folder.project).filter(
+            models.Q(path=old_path) | models.Q(path__startswith=old_path + '/')
+        ).order_by('path'))
+        replacements = {
+            item.pk: new_path + item.path[len(old_path):]
+            for item in affected
+        }
+        target_paths = set(replacements.values())
+        conflicts = self.get_queryset().filter(project=folder.project, path__in=target_paths).exclude(
+            pk__in=replacements
+        )
+        if conflicts.exists():
+            raise serializers.ValidationError({'path': '目标文件夹已存在'})
+
+        self._ensure_parent_folders(folder.project, new_path)
+        serializer.save(path=new_path)
+        for item in affected[1:]:
+            item.path = replacements[item.pk]
+            item.save(update_fields=['path', 'updated_at'])
+
+        suites = TestSuite.objects.filter(project=folder.project).filter(
+            models.Q(folder=old_path) | models.Q(folder__startswith=old_path + '/')
+        )
+        for suite in suites:
+            suite.folder = new_path + suite.folder[len(old_path):]
+            suite.save(update_fields=['folder', 'updated_at'])
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        folder_paths = list(self.get_queryset().filter(project=instance.project).filter(
+            models.Q(path=instance.path) | models.Q(path__startswith=instance.path + '/')
+        ).values_list('path', flat=True))
+        TestSuite.objects.filter(project=instance.project, folder__in=folder_paths).update(
+            folder='', updated_at=timezone.now()
+        )
+        TestSuiteFolder.objects.filter(project=instance.project, path__in=folder_paths).delete()
+
+
 class TestSuiteViewSet(viewsets.ModelViewSet):
     queryset = TestSuite.objects.all()
     serializer_class = TestSuiteSerializer
@@ -954,6 +1041,8 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """创建测试套件时记录日志"""
         instance = serializer.save()
+        if instance.folder:
+            _ensure_test_suite_folder_paths(instance.project, instance.folder)
         log_operation(
             operation_type='create',
             resource_type='suite',
@@ -964,7 +1053,10 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         """更新测试套件时记录日志"""
+        folder_path = serializer.validated_data.get('folder', serializer.instance.folder)
         instance = serializer.save()
+        if folder_path:
+            _ensure_test_suite_folder_paths(instance.project, folder_path)
         log_operation(
             operation_type='edit',
             resource_type='suite',
@@ -1071,7 +1163,10 @@ class TestSetViewSet(viewsets.ModelViewSet):
         for item in items:
             suite = item.test_suite
             try:
-                resp = TestSuiteViewSet().execute(request, pk=suite.id)
+                suite_view = TestSuiteViewSet()
+                suite_view.request = request
+                suite_view.kwargs = {'pk': suite.id}
+                resp = suite_view.execute(request, pk=suite.id)
                 data = resp.data
                 results.append({
                     'suite_id': suite.id,
@@ -1080,6 +1175,7 @@ class TestSetViewSet(viewsets.ModelViewSet):
                     'passed': data.get('passed_requests'),
                     'failed': data.get('failed_requests'),
                     'total': data.get('total_requests'),
+                    'error': data.get('error'),
                 })
             except Exception as e:
                 results.append({

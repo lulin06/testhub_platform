@@ -1,5 +1,5 @@
 <template>
-  <div class="automation-testing">
+  <div class="automation-testing" @click="showFolderContextMenu = false">
     <div class="header">
       <h3>{{ $t('apiTesting.automation.title') }}</h3>
       <el-button type="primary" @click="showCreateSuiteDialog = true">
@@ -9,7 +9,7 @@
     </div>
 
     <div class="content-layout">
-      <ResizableSplitPane v-model="sidebarWidth" min-size="240" max-size="520" second-min-size="480" :storage-key="'api-testing.automation.sidebar-width'">
+      <ResizableSplitPane v-model="sidebarWidth" :min-size="240" :max-size="520" :second-min-size="480" storage-key="api-testing.automation.sidebar-width">
         <template #first>
       <!-- 左侧项目选择和测试套件列表 -->
           <div class="sidebar">
@@ -32,9 +32,14 @@
         <div class="suite-list">
           <div class="list-header">
             <span>场景用例</span>
-            <el-button size="small" text @click="loadTestSuites">
+            <div class="list-actions">
+              <el-button size="small" text :disabled="!selectedProject" title="新建文件夹" @click="createFolder()">
+                <el-icon><FolderAdd /></el-icon>
+              </el-button>
+              <el-button size="small" text @click="refreshSuiteTree">
               <el-icon><Refresh /></el-icon>
-            </el-button>
+              </el-button>
+            </div>
           </div>
           <div class="batch-bar">
             <el-button size="small" type="success" :disabled="selectedSuiteIds.length === 0" @click="runSelectedSuites">
@@ -52,6 +57,7 @@
               show-checkbox
               :check-on-click-node="false"
               :filter-node-method="() => true"
+              @node-contextmenu="onFolderNodeContextMenu"
               @check="onSuiteCheck"
             >
               <template #default="{ data }">
@@ -72,6 +78,20 @@
               </template>
             </el-tree>
           </el-scrollbar>
+          <ul
+            ref="folderContextMenuRef"
+            v-show="showFolderContextMenu"
+            class="folder-context-menu"
+            :style="{ left: folderContextMenuX + 'px', top: folderContextMenuY + 'px' }"
+            @click.stop
+          >
+            <template v-if="contextTreeNode?.type === 'folder'">
+              <li @click="createFolder(contextTreeNode.path)">新建子文件夹</li>
+              <li @click="renameFolder(contextTreeNode)">重命名</li>
+              <li class="danger" @click="deleteFolder(contextTreeNode)">删除</li>
+            </template>
+            <li v-else-if="contextTreeNode?.type === 'suite'" @click="openMoveSuiteDialog(contextTreeNode)">移动到分组</li>
+          </ul>
         </div>
           </div>
         </template>
@@ -259,6 +279,12 @@
           />
         </el-form-item>
 
+        <el-form-item label="文件夹" prop="folder">
+          <el-select v-model="suiteForm.folder" filterable allow-create clearable placeholder="选择或输入文件夹路径">
+            <el-option v-for="folder in folderOptions" :key="folder" :label="folder" :value="folder" />
+          </el-select>
+        </el-form-item>
+
         <el-form-item :label="$t('apiTesting.automation.belongProject')" prop="project">
           <el-select v-model="suiteForm.project" :placeholder="$t('apiTesting.automation.selectProject')">
             <el-option
@@ -287,6 +313,20 @@
         <el-button type="primary" @click="submitSuiteForm" :loading="submittingSuite">
           {{ editingSuite ? $t('apiTesting.common.update') : $t('apiTesting.common.create') }}
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showMoveSuiteDialog" title="移动场景用例" width="420px">
+      <el-form label-width="90px">
+        <el-form-item label="目标分组">
+          <el-select v-model="moveTargetFolder" placeholder="选择目标分组" style="width: 100%">
+            <el-option v-for="folder in moveFolderOptions" :key="folder" :label="folder" :value="folder" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showMoveSuiteDialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!moveTargetFolder" :loading="movingSuite" @click="moveSuiteToFolder">移动</el-button>
       </template>
     </el-dialog>
 
@@ -434,35 +474,6 @@
       </template>
     </el-dialog>
 
-    <!-- 编辑断言对话框 -->
-    <el-dialog
-      v-model="showAssertionDialog"
-      title="编辑断言"
-      width="700px"
-      :close-on-click-modal="false"
-    >
-      <div style="margin-bottom: 10px">
-        <el-button size="small" type="primary" @click="addAssertionRow">
-          <el-icon><Plus /></el-icon> 新增断言
-        </el-button>
-      </div>
-      <div v-for="(a, i) in editingAssertions" :key="i" class="assertion-row">
-        <el-select v-model="a.type" size="small" style="width: 130px">
-          <el-option label="状态码" value="status_code" />
-          <el-option label="JSON路径" value="json_path" />
-          <el-option label="包含文本" value="contains" />
-        </el-select>
-        <el-input v-if="a.type === 'json_path'" v-model="a.json_path" placeholder="$.code" size="small" style="width: 180px" />
-        <el-input v-model="a.expected" placeholder="期望值" size="small" style="width: 140px" />
-        <el-button size="small" type="danger" circle @click="editingAssertions.splice(i, 1)">
-          <el-icon><Delete /></el-icon>
-        </el-button>
-      </div>
-      <template #footer>
-        <el-button @click="showAssertionDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveAssertions" :loading="savingAssertions">保存</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -473,7 +484,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import {
   Plus, Refresh, MoreFilled, VideoPlay, Edit, Search,
-  Folder, Document, ArrowUp, ArrowDown, Delete
+  Folder, FolderAdd, Document, ArrowUp, ArrowDown, Delete
 } from '@element-plus/icons-vue'
 import AssertionEditor from '@/components/api-testing/AssertionEditor.vue'
 import VariableExtractorEditor from '@/components/api-testing/VariableExtractorEditor.vue'
@@ -489,6 +500,15 @@ const projects = ref([])
 const selectedProject = ref(null)
 useRememberedProject(selectedProject, projects)
 const testSuites = ref([])
+const testSuiteFolders = ref([])
+const showFolderContextMenu = ref(false)
+const folderContextMenuX = ref(0)
+const folderContextMenuY = ref(0)
+const folderContextMenuRef = ref(null)
+const contextTreeNode = ref(null)
+const showMoveSuiteDialog = ref(false)
+const movingSuite = ref(false)
+const moveTargetFolder = ref('')
 const selectedSuite = ref(null)
 const executions = ref([])
 const environments = ref([])
@@ -516,6 +536,7 @@ const requestTreeRef = ref()
 const suiteForm = reactive({
   name: '',
   description: '',
+  folder: '',
   project: null,
   environment: null
 })
@@ -697,6 +718,151 @@ const loadTestSuites = async () => {
   }
 }
 
+const loadTestSuiteFolders = async () => {
+  if (!selectedProject.value) {
+    testSuiteFolders.value = []
+    return
+  }
+  try {
+    const all = []
+    let url = '/api-testing/test-suite-folders/?project=' + selectedProject.value
+    while (url) {
+      const response = await api.get(url)
+      all.push(...(response.data.results || response.data || []))
+      let next = response.data.next
+      if (next) next = next.replace(/^https?:\/\/[^/]+/, '').replace(/^\/api/, '')
+      url = next
+    }
+    testSuiteFolders.value = all
+  } catch (error) {
+    ElMessage.error('加载文件夹失败')
+  }
+}
+
+const refreshSuiteTree = async () => {
+  await Promise.all([loadTestSuites(), loadTestSuiteFolders()])
+}
+
+const onFolderNodeContextMenu = async (event, data) => {
+  if (data.type === 'folder' && !data.folderId) return
+  event.preventDefault()
+  contextTreeNode.value = data
+  showFolderContextMenu.value = true
+  folderContextMenuX.value = event.clientX
+  folderContextMenuY.value = event.clientY
+  await nextTick()
+  const menu = folderContextMenuRef.value
+  if (!menu) return
+  const { width, height } = menu.getBoundingClientRect()
+  const margin = 8
+  folderContextMenuX.value = Math.max(margin, Math.min(event.clientX, window.innerWidth - width - margin))
+  folderContextMenuY.value = Math.max(margin, Math.min(event.clientY, window.innerHeight - height - margin))
+}
+
+const openMoveSuiteDialog = (suite) => {
+  contextTreeNode.value = null
+  showFolderContextMenu.value = false
+  moveTargetFolder.value = suite.folder || ''
+  contextTreeNode.value = suite
+  showMoveSuiteDialog.value = true
+}
+
+const moveSuiteToFolder = async () => {
+  const suite = contextTreeNode.value
+  if (!suite || !moveTargetFolder.value) return
+  movingSuite.value = true
+  try {
+    await api.patch(`/api-testing/test-suites/${suite.id}/`, { folder: moveTargetFolder.value })
+    ElMessage.success('场景用例已移动到目标分组')
+    showMoveSuiteDialog.value = false
+    await refreshSuiteTree()
+    if (selectedSuite.value?.id === suite.id) {
+      selectedSuite.value = testSuites.value.find(item => item.id === suite.id) || null
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.folder?.[0] || '移动场景用例失败')
+  } finally {
+    movingSuite.value = false
+  }
+}
+
+const folderOptions = computed(() => {
+  const paths = new Set(testSuiteFolders.value.map(folder => folder.path))
+  testSuites.value.forEach(suite => suite.folder && paths.add(suite.folder))
+  return [...paths].sort((a, b) => a.localeCompare(b, 'zh', { numeric: true }))
+})
+
+const moveFolderOptions = computed(() => folderOptions.value.filter(
+  folder => folder !== contextTreeNode.value?.folder
+))
+
+const createFolder = async (parentPath = '') => {
+  if (!selectedProject.value) return
+  showFolderContextMenu.value = false
+  try {
+    const { value: name } = await ElMessageBox.prompt('请输入文件夹名称', '新建文件夹', {
+      inputPattern: /^[^/\\]+$/,
+      inputErrorMessage: '文件夹名称不能包含斜杠',
+      confirmButtonText: '创建',
+      cancelButtonText: '取消'
+    })
+    const path = [parentPath, name.trim()].filter(Boolean).join('/')
+    await api.post('/api-testing/test-suite-folders/', { project: selectedProject.value, path })
+    ElMessage.success('文件夹已创建')
+    await refreshSuiteTree()
+  } catch (error) {
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.path?.[0] || '创建文件夹失败')
+  }
+}
+
+const renameFolder = async (folder) => {
+  if (!folder) return
+  showFolderContextMenu.value = false
+  const parentPath = folder.path.includes('/') ? folder.path.slice(0, folder.path.lastIndexOf('/')) : ''
+  try {
+    const { value: name } = await ElMessageBox.prompt('请输入新的文件夹名称', '重命名文件夹', {
+      inputValue: folder.name,
+      inputPattern: /^[^/\\]+$/,
+      inputErrorMessage: '文件夹名称不能包含斜杠',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消'
+    })
+    const path = [parentPath, name.trim()].filter(Boolean).join('/')
+    await api.patch(`/api-testing/test-suite-folders/${folder.folderId}/`, { path })
+    ElMessage.success('文件夹已重命名')
+    await refreshSuiteTree()
+    if (selectedSuite.value) {
+      selectedSuite.value = testSuites.value.find(suite => suite.id === selectedSuite.value.id) || null
+    }
+  } catch (error) {
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.path?.[0] || '重命名文件夹失败')
+  }
+}
+
+const deleteFolder = async (folder) => {
+  if (!folder) return
+  showFolderContextMenu.value = false
+  try {
+    await ElMessageBox.confirm(
+      `删除文件夹「${folder.path}」及其子文件夹？其中的场景用例会移到未分组。`,
+      '确认删除',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    await api.delete(`/api-testing/test-suite-folders/${folder.folderId}/`)
+    ElMessage.success('文件夹已删除，场景用例已移到未分组')
+    await refreshSuiteTree()
+    if (selectedSuite.value) {
+      selectedSuite.value = testSuites.value.find(suite => suite.id === selectedSuite.value.id) || null
+    }
+  } catch (error) {
+    if (error !== 'cancel') ElMessage.error('删除文件夹失败')
+  }
+}
+
 // 按 folder 分组场景用例，左侧树展示（folder 名升序，嵌套路径建子文件夹）
 const suiteTree = computed(() => {
   const root = []
@@ -707,13 +873,28 @@ const suiteTree = computed(() => {
     for (const p of parts) {
       path = path ? path + '/' + p : p
       if (!map[path]) {
-        const node = { id: 'f-' + path, name: p, type: 'folder', children: [] }
+        const node = { id: 'f-' + path, name: p, type: 'folder', path, children: [] }
         map[path] = node
         cur.push(node)
       }
       cur = map[path].children
     }
     return cur
+  }
+  for (const folder of testSuiteFolders.value) {
+    const nodeParts = folder.path.split('/')
+    let cur = root
+    let path = ''
+    for (const part of nodeParts) {
+      path = path ? path + '/' + part : part
+      if (!map[path]) {
+        const node = { id: 'f-' + path, name: part, type: 'folder', path, children: [] }
+        map[path] = node
+        cur.push(node)
+      }
+      cur = map[path].children
+    }
+    map[folder.path].folderId = folder.id
   }
   for (const s of testSuites.value) {
     const f = s.folder || '未分组'
@@ -872,7 +1053,7 @@ const onProjectChange = async () => {
 
   selectedSuite.value = null
   await Promise.all([
-    loadTestSuites(),
+    refreshSuiteTree(),
     loadEnvironments(),
     loadRequestTree()
   ])
@@ -944,6 +1125,7 @@ const editSuite = (suite) => {
   editingSuite.value = suite
   suiteForm.name = suite.name
   suiteForm.description = suite.description
+  suiteForm.folder = suite.folder || ''
   suiteForm.project = suite.project
   // 修复：environment字段直接是ID，不需要?.id
   suiteForm.environment = suite.environment || null
@@ -955,6 +1137,7 @@ const duplicateSuite = async (suite) => {
     const newSuite = {
       name: `${suite.name} - ${t('apiTesting.common.copyText')}`,
       description: suite.description,
+      folder: suite.folder || '',
       project: suite.project,
       environment: suite.environment || null  // 修复：直接使用environment ID
     }
@@ -1022,6 +1205,7 @@ const resetSuiteForm = () => {
   Object.assign(suiteForm, {
     name: '',
     description: '',
+    folder: '',
     project: selectedProject.value,
     environment: null
   })
@@ -1242,6 +1426,10 @@ onMounted(() => {
   border-bottom: 1px solid #e4e7ed;
   font-weight: 500;
 }
+.list-actions {
+  display: flex;
+  align-items: center;
+}
 
 .suite-item {
   display: flex;
@@ -1283,6 +1471,30 @@ onMounted(() => {
   visibility: hidden;
   color: #f56c6c;
   cursor: pointer;
+}
+.folder-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 140px;
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+.folder-context-menu li {
+  padding: 10px 16px;
+  color: #303133;
+  font-size: 14px;
+  cursor: pointer;
+}
+.folder-context-menu li:hover {
+  background: #f5f7fa;
+}
+.folder-context-menu li.danger {
+  color: #f56c6c;
 }
 .suite-tree-node:hover .del-icon {
   visibility: visible;

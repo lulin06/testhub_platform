@@ -175,6 +175,27 @@ class RequestHistory(models.Model):
         return f"{self.request.name} - {self.executed_at}"
 
 
+class TestSuiteFolder(models.Model):
+    """场景用例文件夹，按项目保存完整路径以支持空文件夹和嵌套结构。"""
+    project = models.ForeignKey(ApiProject, on_delete=models.CASCADE, related_name='test_suite_folders',
+                                verbose_name='所属项目')
+    path = models.CharField(max_length=200, verbose_name='文件夹路径')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        db_table = 'api_test_suite_folders'
+        verbose_name = '场景用例文件夹'
+        verbose_name_plural = '场景用例文件夹'
+        ordering = ['path']
+        constraints = [
+            models.UniqueConstraint(fields=['project', 'path'], name='unique_test_suite_folder_path'),
+        ]
+
+    def __str__(self):
+        return self.path
+
+
 class TestSuite(models.Model):
     """测试套件模型（自动化测试）"""
     project = models.ForeignKey(ApiProject, on_delete=models.CASCADE, related_name='test_suites',

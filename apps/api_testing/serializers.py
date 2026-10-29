@@ -14,7 +14,7 @@ class NullableDateField(serializers.DateField):
         return super().to_internal_value(value)
 from .models import (
     ApiProject, ApiCollection, ApiRequest, Environment,
-    RequestHistory, TestSuite, TestExecution, TestSuiteRequest,
+    RequestHistory, TestSuite, TestSuiteFolder, TestExecution, TestSuiteRequest,
     ScheduledTask, TaskExecutionLog, NotificationLog,
     TaskNotificationSetting, OperationLog, AIServiceConfig,
     TestSet, TestSetItem,
@@ -189,6 +189,13 @@ class TestSuiteRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestSuiteRequest
         fields = ['id', 'request', 'order', 'assertions', 'extractors', 'enabled']
+
+
+class TestSuiteFolderSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TestSuiteFolder
+        fields = ['id', 'project', 'path', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
 
 
 class TestSuiteSerializer(serializers.ModelSerializer):

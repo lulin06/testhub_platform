@@ -194,7 +194,7 @@ const savePicked = async () => {
   const nodes = pickerTreeRef.value.getCheckedNodes().filter(n => !n.children)
   const suiteIds = nodes.map(n => n.id)
   try {
-    await api.put(`/api-testing/test-sets/${currentSet.value.id}/`, { suite_ids: suiteIds })
+    await api.patch(`/api-testing/test-sets/${currentSet.value.id}/`, { suite_ids: suiteIds })
     ElMessage.success(`已加入 ${suiteIds.length} 个用例`)
     pickerVisible.value = false
     loadSets()
@@ -209,7 +209,13 @@ const runSet = async (ts) => {
     const res = await api.post(`/api-testing/test-sets/${ts.id}/execute/`)
     const results = res.data.results || []
     const failed = results.filter(r => r.status !== 'COMPLETED').length
-    ElMessage.success(`执行完成：${results.length - failed}/${results.length} 通过`)
+    if (results.length === 0) {
+      ElMessage.warning('测试套中没有可运行的场景用例')
+    } else if (failed > 0) {
+      ElMessage.error(`执行完成：${results.length - failed}/${results.length} 通过，${failed} 个失败`)
+    } else {
+      ElMessage.success(`执行完成：${results.length}/${results.length} 通过`)
+    }
   } catch (e) {
     ElMessage.error('运行失败')
   } finally {
