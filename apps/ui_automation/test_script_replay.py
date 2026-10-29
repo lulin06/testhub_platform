@@ -1,17 +1,20 @@
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase
+from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
 from apps.ui_automation.models import StorageState, TestCase as UiTestCase, TestExecution, TestScript, UiProject
 from apps.ui_automation.serializers import TestCaseStepSerializer
 from apps.ui_automation.script_runner import execute_script, get_playwright_browsers_path
 from apps.ui_automation.script_security import MAX_SCRIPT_BYTES, ScriptSecurityError, analyze_script
+from apps.ui_automation.test_executor import TestExecutor
 
 
 class RecordedScriptSecurityTests(SimpleTestCase):
@@ -175,6 +178,54 @@ class StorageStateApiTests(TestCase):
         download = self.client.get(f'/api/ui-automation/storage-states/{state_id}/download/')
         self.assertEqual(download.status_code, 200)
         self.assertEqual(b''.join(download.streaming_content), b'{\n  "cookies": [\n    {\n      "name": "session",\n      "value": "fresh"\n    }\n  ],\n  "origins": []\n}')
+
+    def test_storage_state_step_overwrite_reuses_existing_file(self):
+        with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            initial_content = b'{"cookies": [], "origins": []}'
+            response = self.client.post(
+                '/api/ui-automation/storage-states/',
+                {
+                    'project': self.project.id,
+                    'name': '覆盖目标',
+                    'file': SimpleUploadedFile('initial.json', initial_content, content_type='application/json'),
+                },
+                format='multipart',
+            )
+            self.assertEqual(response.status_code, 201, response.data)
+            state = StorageState.objects.get(pk=response.data['id'])
+            original_path = state.file.name
+            original_files = set(Path(state.file.path).parent.iterdir())
+
+            executor = object.__new__(TestExecutor)
+            executor._active_project_id = self.project.id
+            executor.executed_by = self.user
+            executor.current_page = SimpleNamespace(url='https://example.com/account')
+            executor.context = SimpleNamespace(storage_state=lambda path: Path(path).write_bytes(
+                b'{"cookies": [{"name": "session", "value": "fresh"}], "origins": []}'
+            ))
+            executor._execute_storage_state_action({
+                'operation': 'save',
+                'mode': 'overwrite',
+                'storage_state_id': state.id,
+            })
+
+            state.refresh_from_db()
+            self.assertEqual(state.file.name, original_path)
+            self.assertEqual(Path(state.file.path).read_bytes(), b'{"cookies": [{"name": "session", "value": "fresh"}], "origins": []}')
+            self.assertEqual(set(Path(state.file.path).parent.iterdir()), original_files)
+            self.assertEqual(StorageState.objects.filter(project=self.project).count(), 1)
+
+            state.file.storage.delete(original_path)
+            Path(state.file.path).parent.rmdir()
+            executor._execute_storage_state_action({
+                'operation': 'save',
+                'mode': 'overwrite',
+                'storage_state_id': state.id,
+            })
+            state.refresh_from_db()
+            self.assertEqual(state.file.name, original_path)
+            self.assertTrue(Path(state.file.path).is_file())
+            self.assertEqual(StorageState.objects.filter(project=self.project).count(), 1)
 
     def test_storage_state_step_requires_operation_and_target(self):
         # 步骤参数缺失时应在序列化层阻止无效保存或切换动作。

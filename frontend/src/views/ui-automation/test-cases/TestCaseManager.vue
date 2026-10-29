@@ -150,10 +150,14 @@
                 :elements="availableElements"
                 :pages="pages"
                 :storage-states="storageStates"
+                :elements-loading="elementsLoading"
+                :elements-ready="elementLibraryLoaded"
                 :helper-actions="true"
                 :show-toolbar="false"
                 @helper="({ step, field }) => openDataFactorySelector(step, field)"
                 @variable="({ step, field }) => openVariableHelper(step, field)"
+                @open-element-selector="loadElementsForStep"
+                @search-elements="searchElementsForStep"
                 @change="onStepsReorder"
               />
             </div>
@@ -497,6 +501,12 @@ const showVariablesDialog = ref(false)
 const variableDraft = ref([])
 const savingVariables = ref(false)
 const availableElements = ref([])
+const elementsLoading = ref(false)
+const elementLibraryLoaded = ref(false)
+const elementsReady = ref(Promise.resolve())
+const elementSearchCache = new Set()
+const elementSearchInFlight = new Set()
+const elementSearchTimers = new Map()
 const pages = ref([])
 const searchKeyword = ref('')
 const showCreateDialog = ref(false)
@@ -589,17 +599,90 @@ const loadTestCases = async () => {
 }
 
 const loadElements = async () => {
+  // 项目切换时后台预加载一次全量元素；步骤编排复用此缓存，避免重复请求。
+  availableElements.value = []
+  elementsLoading.value = true
+  elementLibraryLoaded.value = false
+  elementSearchCache.clear()
+  elementSearchInFlight.clear()
+  elementSearchTimers.forEach(timer => clearTimeout(timer))
+  elementSearchTimers.clear()
+
   if (!projectId.value) {
-    availableElements.value = []
+    elementsLoading.value = false
+    elementsReady.value = Promise.resolve()
     return
   }
 
+  const project = projectId.value
+  const request = getElements({ project, page_size: 1000, compact: 1 })
+    .then(response => {
+      if (String(projectId.value) !== String(project)) return
+      availableElements.value = response.data.results || response.data
+      elementLibraryLoaded.value = true
+    })
+    .catch(error => {
+      console.error('获取元素列表失败:', error)
+    })
+    .finally(() => {
+      if (String(projectId.value) === String(project)) elementsLoading.value = false
+    })
+  elementsReady.value = request
+  return request
+}
+
+const mergeAvailableElements = (elements = []) => {
+  const byId = new Map(availableElements.value.map(element => [String(element.id), element]))
+  elements.forEach(element => byId.set(String(element.id), element))
+  availableElements.value = [...byId.values()]
+}
+
+const elementSearchKey = (step, keyword = '') => `${step.element_page || ''}\u0000${String(keyword).trim().toLowerCase()}`
+
+const fetchElementsForStep = async (step, keyword = '') => {
+  if (!projectId.value) return
+  // 全量缓存完成后由 Element Plus 在本地过滤，避免打开选择器再次请求后端。
+  if (elementLibraryLoaded.value) return
+  const normalizedKeyword = String(keyword || '').trim()
+  const cacheKey = elementSearchKey(step, normalizedKeyword)
+  if (elementSearchCache.has(cacheKey) || elementSearchInFlight.has(cacheKey)) return
+
+  elementSearchInFlight.add(cacheKey)
+  elementsLoading.value = true
   try {
-    const response = await getElements({ project: projectId.value, page_size: 1000 })
-    availableElements.value = response.data.results || response.data
+    const response = await getElements({
+      project: projectId.value,
+      page_name: step.element_page || undefined,
+      search: normalizedKeyword || undefined,
+      compact: 1,
+      page_size: 50
+    })
+    mergeAvailableElements(response.data.results || response.data)
+    elementSearchCache.add(cacheKey)
   } catch (error) {
-    console.error('获取元素列表失败:', error)
+    console.error('按需获取元素失败:', error)
+  } finally {
+    elementSearchInFlight.delete(cacheKey)
+    elementsLoading.value = false
   }
+}
+
+const getStepElementId = step => {
+  const value = step?.element ?? step?.element_id
+  return value && typeof value === 'object' ? value.id : value
+}
+
+const loadElementsForStep = step => fetchElementsForStep(step)
+
+const searchElementsForStep = ({ step, keyword }) => {
+  const timerKey = String(step.id ?? step.element_id ?? 'new-step')
+  const oldTimer = elementSearchTimers.get(timerKey)
+  if (oldTimer) clearTimeout(oldTimer)
+  const timer = setTimeout(() => {
+    elementSearchTimers.delete(timerKey)
+    fetchElementsForStep(step, keyword)
+  }, 180)
+  elementSearchTimers.set(timerKey, timer)
 }
 
 const loadPages = async () => {
@@ -631,9 +714,10 @@ const onProjectChange = async () => {
   currentVariables.value = loadUiVariables(projects.value.find(project => String(project.id) === String(projectId.value))?.variables || [])
   executionResult.value = null
 
+  // 元素库在后台加载；用例列表和页面树无需等待全量元素响应。
+  loadElements()
   await Promise.all([
     loadTestCases(),
-    loadElements(),
     loadPages(),
     loadStorageStates()
   ])
@@ -700,12 +784,25 @@ const removeStorageState = async state => {
 
 // 将接口返回的测试步骤转换为结构化步骤组件所需的编辑字段。
 const hydrateTestCaseSteps = (steps = []) => steps.map(step => {
-  const element = availableElements.value.find(item => String(item.id) === String(step.element))
+  const elementId = getStepElementId(step)
+  const element = availableElements.value.find(item => String(item.id) === String(elementId)) || (
+    elementId
+      ? {
+          id: elementId,
+          name: step.element_name || `元素 #${elementId}`,
+          page: step.element_page || '',
+          locator_value: step.element_locator || '',
+          locator_strategy: step.element_locator_strategy || '',
+          locator_options: step.element_locator_options || {}
+        }
+      : null
+  )
+  if (element) mergeAvailableElements([element])
   const strategy = element?.locator_strategy?.name || element?.locator_strategy || step.element_locator_strategy || ''
   const locatorOptions = element?.locator_options || step.element_locator_options || {}
   return {
     ...step,
-    element_id: step.element || '',
+    element_id: elementId || '',
     // 优先使用元素库数据，详情接口字段作为元素列表尚未加载时的回退。
     element_page: element?.page || step.element_page || '',
     locator_strategy: strategy.toLowerCase(),
@@ -731,6 +828,9 @@ const selectTestCase = async (testCase) => {
   } catch (error) {
     console.warn('获取测试用例详情失败，使用列表数据:', error)
   }
+  // 等待项目级元素库缓存完成，再渲染步骤，确保下拉框显示完整元素信息。
+  currentSteps.value = []
+  await elementsReady.value
   selectedTestCase.value = selected
   // 确保步骤数据格式正确，添加前端需要的字段
   if (selected.steps && selected.steps.length > 0) {
@@ -819,6 +919,7 @@ const saveTestCase = async () => {
     // 保存后重新读取服务端步骤，确保元素、定位策略和定位器来自真实关联数据。
     const detailResponse = await getTestCaseDetail(selectedTestCase.value.id)
     const savedTestCase = detailResponse.data
+    await elementsReady.value
     currentSteps.value = hydrateTestCaseSteps(savedTestCase.steps || [])
     ElMessage.success(t('uiAutomation.testCase.save.success'))
 

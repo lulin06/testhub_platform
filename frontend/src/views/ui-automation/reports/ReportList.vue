@@ -97,7 +97,9 @@
       v-model="showDetailDialog"
       :title="$t('uiAutomation.report.reportDetail')"
       width="80%"
+      align-center
       :close-on-click-modal="false"
+      class="report-detail-dialog"
     >
       <div v-if="currentReport" class="report-detail">
         <el-descriptions :column="2" border>
@@ -559,6 +561,12 @@ onMounted(async () => {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* 内容较长时在弹窗内部滚动，同时保留弹窗的垂直居中位置。 */
+:deep(.report-detail-dialog .el-dialog__body) {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 
 // 报告详情样式

@@ -31,14 +31,13 @@
 
       <el-table :data="suites" v-loading="loading" style="width: 100%">
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="name" :label="$t('uiAutomation.suite.suiteName')" min-width="200">
+        <el-table-column prop="name" :label="$t('uiAutomation.suite.suiteName')" min-width="400">
           <template #default="{ row }">
             <el-link @click="editSuite(row.id)" type="primary">
               {{ row.name }}
             </el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="description" :label="$t('uiAutomation.common.description')" min-width="200" show-overflow-tooltip />
         <el-table-column :label="$t('uiAutomation.suite.testCaseCount')" width="120">
           <template #default="{ row }">
             {{ row.test_case_count || 0 }}

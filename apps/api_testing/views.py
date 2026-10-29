@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db import models
+from django.db import transaction
 from django.utils import timezone
 from django.http import HttpResponse, FileResponse, Http404, HttpResponseNotFound
 from django.views.static import serve
@@ -31,6 +32,7 @@ from .models import (
 
 from .serializers import (
     ApiProjectSerializer, ApiCollectionSerializer, ApiRequestSerializer,
+    ApiCollectionTreeSerializer, ApiRequestTreeSerializer,
     EnvironmentSerializer, RequestHistorySerializer, TestSuiteSerializer,
     TestSuiteRequestSerializer, TestExecutionSerializer, UserSerializer,
     ScheduledTaskSerializer, TaskExecutionLogSerializer,
@@ -42,10 +44,18 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 
-from .utils import execute_assertions
+from .utils import (
+    execute_assertions,
+    extract_response_variables,
+    normalize_suite_assertions,
+    prepare_request_body,
+    send_api_request,
+)
 from .operation_logger import log_operation
 from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 from .variable_resolver import VariableResolver
+from .importers import parse_collection
+from .path_params import resolve_path_parameters
 from .serializers import (
     ApiProjectSerializer, ApiCollectionSerializer, ApiRequestSerializer,
     EnvironmentSerializer, RequestHistorySerializer, TestSuiteSerializer,
@@ -62,7 +72,7 @@ from rest_framework.pagination import PageNumberPagination
 class StandardPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = 'page_size'
-    max_page_size = 1000
+    max_page_size = 1500
 
 
 class ApiProjectViewSet(viewsets.ModelViewSet):
@@ -239,16 +249,25 @@ class ApiCollectionViewSet(viewsets.ModelViewSet):
     queryset = ApiCollection.objects.all()
     serializer_class = ApiCollectionSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['project', 'parent']
+
+    def get_serializer_class(self):
+        if self.action == 'list' and self.request.query_params.get('tree') == '1':
+            return ApiCollectionTreeSerializer
+        return super().get_serializer_class()
     
     def get_queryset(self):
         user = self.request.user
-        return ApiCollection.objects.filter(
+        queryset = ApiCollection.objects.filter(
             project__in=ApiProject.objects.filter(
                 models.Q(owner=user) | models.Q(members=user)
             )
         ).distinct()
+        if self.action == 'list' and self.request.query_params.get('tree') == '1':
+            queryset = queryset.only('id', 'name', 'project', 'parent', 'order')
+        return queryset
 
     def perform_create(self, serializer):
         """创建集合时记录日志"""
@@ -283,14 +302,23 @@ class ApiCollectionViewSet(viewsets.ModelViewSet):
         )
         instance.delete()
 
-
 class ApiRequestViewSet(viewsets.ModelViewSet):
     queryset = ApiRequest.objects.all()
     serializer_class = ApiRequestSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['collection', 'method', 'request_type']
     search_fields = ['name', 'url']
+
+    def get_serializer_class(self):
+        if self.action == 'list' and self.request.query_params.get('tree') == '1':
+            return ApiRequestTreeSerializer
+        return super().get_serializer_class()
+
+    def http_method_not_allowed(self, request, *args, **kwargs):
+        logger.warning('API请求接口收到不支持的HTTP方法 %s: %s', request.method, request.path)
+        return super().http_method_not_allowed(request, *args, **kwargs)
     
     def get_queryset(self):
         user = self.request.user
@@ -321,6 +349,10 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
                 )
             ).distinct()
 
+        if self.action == 'list' and self.request.query_params.get('tree') == '1':
+            queryset = queryset.only(
+                'id', 'name', 'request_type', 'method', 'url', 'collection', 'order'
+            )
         return queryset
 
     def perform_create(self, serializer):
@@ -355,6 +387,80 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
             user=self.request.user
         )
         instance.delete()
+
+    def _parse_import_file(self, request):
+        """Read a bounded upload and convert it to normalized interface records."""
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            raise ValueError('请选择要导入的文件')
+        if uploaded.size > 10 * 1024 * 1024:
+            raise ValueError('文件不能超过 10 MB')
+        return parse_collection(uploaded.read(), uploaded.name)
+
+    @action(detail=False, methods=['post'], url_path='import-preview')
+    def import_preview(self, request):
+        """Parse an OpenAPI or Postman file and return selectable grouped interfaces."""
+        try:
+            items = self._parse_import_file(request)
+        except ValueError as exc:
+            logger.warning('API接口导入预览解析失败: %s', exc)
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        groups = {}
+        for index, item in enumerate(items):
+            group_name = item.pop('group')
+            item['id'] = str(index)
+            groups.setdefault(group_name, []).append(item)
+        return Response({
+            'total': len(items),
+            'groups': [{'name': name, 'items': group_items} for name, group_items in groups.items()],
+        })
+
+    @action(detail=False, methods=['post'], url_path='import-batch')
+    def import_batch(self, request):
+        """Create selected imported interfaces under their source groups."""
+        try:
+            items = self._parse_import_file(request)
+        except ValueError as exc:
+            logger.warning('API接口批量导入解析失败: %s', exc)
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            project_id = int(request.data.get('project'))
+            selected_ids = {int(value) for value in request.data.getlist('selected_ids')}
+        except (TypeError, ValueError):
+            return Response({'error': '项目或接口选择无效'}, status=status.HTTP_400_BAD_REQUEST)
+        project = ApiProject.objects.filter(
+            models.Q(owner=request.user) | models.Q(members=request.user),
+            id=project_id,
+        ).distinct().first()
+        if not project:
+            return Response({'error': '无权访问目标项目'}, status=status.HTTP_403_FORBIDDEN)
+        selected = [(index, item) for index, item in enumerate(items) if index in selected_ids]
+        if not selected:
+            return Response({'error': '请至少选择一个接口'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                collection_by_name = {}
+                created = 0
+                for index, item in selected:
+                    group = item['group']
+                    collection = collection_by_name.get(group)
+                    if collection is None:
+                        collection = ApiCollection.objects.create(
+                            project=project, name=group, description='由接口定义文件导入',
+                        )
+                        collection_by_name[group] = collection
+                    ApiRequest.objects.create(
+                        collection=collection,
+                        name=item['name'][:200], description=item.get('description', ''),
+                        method=item['method'], url=item['url'], headers=item['headers'],
+                        params=item['params'], body=item['body'], created_by=request.user,
+                        order=index,
+                    )
+                    created += 1
+        except Exception:
+            logger.exception('批量导入 API 接口失败')
+            return Response({'error': '接口导入失败'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'imported': created, 'groups': len(collection_by_name)}, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['post'])
     def execute(self, request, pk=None):
@@ -368,9 +474,10 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
 
             # 解析环境变量
             variables = {}
+            environment = None
             if environment_id:
-                env = Environment.objects.get(id=environment_id)
-                variables.update(env.variables)
+                environment = Environment.objects.get(id=environment_id)
+                variables.update(environment.variables)
             
             # 使用前端发送的更新后的数据，如果没有则使用数据库中的数据
             request_params = request.data.get('params', api_request.params)
@@ -403,59 +510,23 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
             for key, value in params.items():
                 params[key] = self._replace_variables(str(value), variables)
                 params[key] = resolver.resolve(params[key])
+            url, params = resolve_path_parameters(url, params)
 
-            # 准备请求体
-            body_data = None
-            body_type = 'none'
-            if request_body and request_method in ['POST', 'PUT', 'PATCH']:
-                body_type = request_body.get('type', 'none')
-                body_content = request_body.get('data')
-
-                if body_type == 'json':
-                    if isinstance(body_content, dict):
-                        body_data = self._replace_variables_in_dict(body_content, variables)
-                        body_data = self._resolve_variables_in_dict(body_data, resolver)
-                    else:
-                        body_data = body_content
-                elif body_type == 'raw':
-                    if isinstance(body_content, str):
-                        body_data = self._replace_variables(body_content, variables)
-                        body_data = resolver.resolve(body_data)
-                    else:
-                        body_data = body_content
-                elif body_type in ['form-data', 'x-www-form-urlencoded']:
-                    if isinstance(body_content, list):
-                        body_data = self._replace_variables_in_dict(body_content, variables)
-                        body_data = self._resolve_variables_in_dict(body_data, resolver)
-                    else:
-                        body_data = body_content
-                else:
-                    body_data = body_content
+            # 单接口与套件执行共用请求体解析，避免编辑后即时执行与已保存执行行为不一致。
+            body_type, body_data = prepare_request_body(
+                request_body, request_method, variables, resolver
+            )
             
             # 执行请求
             start_time = time.time()
-
-            # 根据请求体类型决定使用 data 还是 json 参数
-            if body_type == 'raw':
-                # raw 类型使用 data 参数，发送原始字符串
-                response = requests.request(
-                    method=request_method,
-                    url=url,
-                    headers=headers,
-                    params=params,
-                    data=body_data,
-                    timeout=30
-                )
-            else:
-                # json 类型使用 json 参数，自动序列化
-                response = requests.request(
-                    method=request_method,
-                    url=url,
-                    headers=headers,
-                    params=params,
-                    json=body_data,
-                    timeout=30
-                )
+            response = send_api_request(
+                method=request_method,
+                url=url,
+                headers=headers,
+                params=params,
+                body_type=body_type,
+                body=body_data,
+            )
             end_time = time.time()
             
             response_time = (end_time - start_time) * 1000  # 转换为毫秒
@@ -466,6 +537,10 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
                 if assertion.get('type') == 'response_time':
                     assertion['actual_time'] = response_time
             assertions_results = execute_assertions(response, assertions)
+
+            extractors = request.data.get('extractors', api_request.extractors) or []
+            # 单接口提取结果只返回给当前执行，不持久化到所选环境。
+            extraction_results, extracted_variables = extract_response_variables(response, extractors)
             
             # 保存请求历史
             history = RequestHistory.objects.create(
@@ -500,6 +575,8 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
             # 返回包含断言结果的数据
             history_data = RequestHistorySerializer(history).data
             history_data['assertions_results'] = assertions_results
+            history_data['extraction_results'] = extraction_results
+            history_data['extracted_variables'] = extracted_variables
             
             return Response(history_data)
             
@@ -714,6 +791,7 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
             
             # 创建变量解析器
             resolver = VariableResolver()
+            suite_variables = dict(test_suite.environment.variables or {}) if test_suite.environment else {}
 
             # 执行每个请求
             for suite_request in suite_requests:
@@ -721,9 +799,7 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
                 
                 try:
                     # 解析环境变量
-                    variables = {}
-                    if test_suite.environment:
-                        variables.update(test_suite.environment.variables)
+                    variables = dict(suite_variables)
                     
                     # 替换URL中的变量（先解析动态函数，再替换环境变量）
                     url = self._replace_variables(api_request.url, variables)
@@ -747,33 +823,40 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
                             headers[key] = self._replace_variables(str(value), variables)
                             headers[key] = resolver.resolve(headers[key])
 
-                    params = api_request.params.copy()
+                    params = api_request.params.copy() if api_request.params else {}
                     for key, value in params.items():
                         params[key] = self._replace_variables(str(value), variables)
                         params[key] = resolver.resolve(params[key])
+                    url, params = resolve_path_parameters(url, params)
 
-                    body_data = None
-                    if api_request.body and api_request.method in ['POST', 'PUT', 'PATCH']:
-                        if api_request.body.get('type') == 'json':
-                            body_data = api_request.body.get('data', {})
-                            body_data = self._replace_variables_in_dict(body_data, variables)
-                            body_data = self._resolve_variables_in_dict(body_data, resolver)
+                    body_type, body_data = prepare_request_body(
+                        api_request.body, api_request.method, variables, resolver
+                    )
 
                     # 执行请求
                     start_time = time.time()
-                    response = requests.request(
+                    response = send_api_request(
                         method=api_request.method,
                         url=url,
                         headers=headers,
                         params=params,
-                        json=body_data,
-                        timeout=30
+                        body_type=body_type,
+                        body=body_data,
                     )
                     end_time = time.time()
                     response_time = (end_time - start_time) * 1000
+
+                    # 套件后续请求使用当前请求新提取的变量。
+                    _, extracted_variables = extract_response_variables(
+                        response,
+                        suite_request.extractors,
+                    )
+                    # suite_variables 仅存在于本次套件执行上下文，执行结束后自动释放。
+                    variables.update(extracted_variables)
+                    suite_variables.update(extracted_variables)
                     
-                    # 执行断言验证
-                    assertions = api_request.assertions or []
+                    # 套件请求配置是执行时的唯一断言来源，允许在套件内独立编辑。
+                    assertions = normalize_suite_assertions(suite_request.assertions, response_time)
                     # 添加响应时间到断言中
                     for assertion in assertions:
                         if assertion.get('type') == 'response_time':
@@ -786,23 +869,14 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
                     passed = True
                     error_message = ''
                     
-                    # 检查套件请求的断言
-                    for assertion in suite_request.assertions:
-                        # 简单的状态码断言
-                        if assertion.get('type') == 'status_code':
-                            expected = assertion.get('value')
-                            if response.status_code != expected:
-                                passed = False
-                                error_message = f'状态码断言失败: 期望 {expected}, 实际 {response.status_code}'
-                                break
-                    
-                    # 检查接口自身的断言
-                    if passed and assertions_results:
-                        for assertion_result in assertions_results:
-                            if not assertion_result.get('passed', True):
-                                passed = False
-                                error_message = f"断言失败: {assertion_result.get('name', '未命名断言')} - {assertion_result.get('error', '断言不通过')}"
-                                break
+                    for assertion_result in assertions_results:
+                        if not assertion_result.get('passed', True):
+                            passed = False
+                            error_message = (
+                                f"断言失败: {assertion_result.get('name', '未命名断言')} - "
+                                f"{assertion_result.get('error') or '断言不通过'}"
+                            )
+                            break
                     
                     if passed:
                         passed_count += 1
@@ -925,7 +999,9 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
                     defaults={
                         'order': TestSuiteRequest.objects.filter(test_suite=test_suite).count(),
                         'enabled': True,
-                        'assertions': []
+                        # 新增到套件时复制接口配置，之后可在套件中独立调整。
+                        'assertions': list(api_request.assertions or []),
+                        'extractors': list(api_request.extractors or [])
                     }
                 )
             
@@ -1029,6 +1105,41 @@ class TestSuiteRequestViewSet(viewsets.ModelViewSet):
                 models.Q(owner=user) | models.Q(members=user)
             )
         ).distinct()
+
+    @action(detail=True, methods=['post'])
+    def move(self, request, pk=None):
+        """在同一套件内移动请求，并保持执行顺序连续。"""
+        suite_request = self.get_object()
+        direction = request.data.get('direction')
+        if direction not in {'up', 'down'}:
+            return Response({'error': 'direction must be up or down'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            ordered_requests = list(
+                TestSuiteRequest.objects.select_for_update()
+                .filter(test_suite=suite_request.test_suite)
+                .order_by('order', 'id')
+            )
+            current_index = next(
+                (index for index, item in enumerate(ordered_requests) if item.id == suite_request.id),
+                None,
+            )
+            if current_index is None:
+                return Response({'error': 'request not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            target_index = current_index - 1 if direction == 'up' else current_index + 1
+            if target_index < 0 or target_index >= len(ordered_requests):
+                return Response(TestSuiteRequestSerializer(suite_request).data)
+
+            ordered_requests[current_index], ordered_requests[target_index] = (
+                ordered_requests[target_index], ordered_requests[current_index]
+            )
+            for order, item in enumerate(ordered_requests):
+                if item.order != order:
+                    item.order = order
+                    item.save(update_fields=['order'])
+
+        return Response(TestSuiteRequestSerializer(suite_request).data)
 
 
 class TestExecutionViewSet(viewsets.ReadOnlyModelViewSet):

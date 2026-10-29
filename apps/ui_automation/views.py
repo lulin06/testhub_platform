@@ -7,7 +7,6 @@ from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse, FileResponse
-from django.core.files.base import ContentFile
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import models, transaction
 from django.utils import timezone
@@ -32,7 +31,8 @@ from .models import (
 from .serializers import (
     UiProjectSerializer, UiProjectCreateSerializer, UiProjectUpdateSerializer, StorageStateSerializer,
     LocatorStrategySerializer,
-    ElementSerializer, ElementEnhancedSerializer,
+    ElementSerializer, ElementEnhancedSerializer, ElementCompactSerializer,
+    resolve_page_group,
     TestScriptSerializer, TestScriptCreateSerializer, TestScriptUpdateSerializer,
     TestSuiteSerializer, TestSuiteCreateSerializer, TestSuiteUpdateSerializer, TestSuiteWithScriptsSerializer,
     TestSuiteScriptSerializer, TestSuiteTestCaseSerializer,
@@ -172,11 +172,9 @@ def _resolve_element(project, user, action, locator, page_url, strategies):
         return element
 
     page_name = _page_name_from_url(page_url)
-    group = None
-    if page_name:
-        group = ElementGroup.objects.filter(project=project, name=page_name, parent_group__isnull=True).first()
-        if group is None:
-            group = ElementGroup.objects.create(project=project, name=page_name)
+    group = resolve_page_group(project, page_name)
+    if group:
+        page_name = group.name
     element_type, element_name = _element_metadata(action, locator)
     return Element.objects.create(
         project=project,
@@ -388,13 +386,7 @@ class StorageStateViewSet(viewsets.ModelViewSet):
         if not isinstance(payload, dict) or not isinstance(payload.get('cookies', []), list) or not isinstance(payload.get('origins', []), list):
             raise ValidationError({'content': '登录态 JSON 必须包含 cookies 和 origins 数组'})
         raw = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
-        # FileField.delete() clears its in-memory name, so retain the filename first.
-        file_name = instance.file.name.rsplit('/', 1)[-1] if instance.file and instance.file.name else 'storage_state.json'
-        if instance.file:
-            instance.file.delete(save=False)
-        instance.file.save(file_name, ContentFile(raw), save=False)
-        instance.file_size = len(raw)
-        instance.save(update_fields=['file', 'file_size', 'updated_at'])
+        instance.write_content(raw)
         return Response(self.get_serializer(instance).data)
 
 
@@ -408,11 +400,14 @@ class LocatorStrategyViewSet(viewsets.ModelViewSet):
 class ElementViewSet(viewsets.ModelViewSet):
     queryset = Element.objects.all()
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['project', 'locator_strategy', 'element_type', 'validation_status', 'group']
     search_fields = ['name', 'description', 'page', 'component_name']
 
     def get_serializer_class(self):
+        if self.action in ['list', 'retrieve'] and self.request.query_params.get('compact') == '1':
+            return ElementCompactSerializer
         if self.action in ['list', 'retrieve']:
             return ElementEnhancedSerializer
         return ElementSerializer
@@ -423,9 +418,14 @@ class ElementViewSet(viewsets.ModelViewSet):
         accessible_projects = UiProject.objects.filter(
             models.Q(owner=user) | models.Q(members=user)
         ).distinct()
-        return Element.objects.filter(project__in=accessible_projects).select_related(
+        queryset = Element.objects.filter(project__in=accessible_projects).select_related(
             'project', 'group', 'locator_strategy', 'created_by', 'parent_element'
-        ).prefetch_related('script_usages__script').order_by('page', 'order', 'name')
+        ).annotate(
+            case_step_count=models.Count('testcasestep')
+        ).order_by('page', 'order', 'name')
+        if self.request.query_params.get('compact') != '1':
+            queryset = queryset.prefetch_related('script_usages__script')
+        return queryset
 
     def filter_queryset(self, queryset):
         # 先应用默认的过滤器
@@ -558,7 +558,7 @@ class ElementViewSet(viewsets.ModelViewSet):
                 'locator_value': element.locator_value,
                 'locator_options': element.locator_options or {},
                 'validation_status': element.validation_status,
-                'usage_count': element.usage_count,
+                'usage_count': element.case_step_count,
                 'order': element.order,
                 'group_id': element.group_id,  # 用于前端关联到页面
                 'page': element.page,  # 保留向后兼容
@@ -581,10 +581,11 @@ class ElementViewSet(viewsets.ModelViewSet):
             suggestions.append("建议测试下拉框的所有选项")
 
         # 基于使用频率生成建议
-        if element.usage_count == 0:
-            suggestions.append("此元素尚未在任何脚本中使用，考虑是否需要删除")
-        elif element.usage_count > 10:
-            suggestions.append("此元素使用频率较高，建议添加到页面对象中以提高复用性")
+        usage_count = element.case_step_count
+        if usage_count == 0:
+            suggestions.append("此元素尚未被任何正式用例步骤引用，考虑是否需要删除")
+        elif usage_count > 10:
+            suggestions.append("此元素被正式用例步骤引用较多，建议添加到页面对象中以提高复用性")
 
         return suggestions
 
@@ -822,7 +823,6 @@ class ScriptElementUsageViewSet(viewsets.ModelViewSet):
                             usage.frequency += 1
                             usage.save()
 
-                        element.increment_usage_count()
                         usages.append(usage)
                     except Element.DoesNotExist:
                         missing_elements.append(match)
@@ -1382,8 +1382,14 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
         browser = request.data.get('browser', 'chrome')
         headless = request.data.get('headless', False)
         storage_state_id = request.data.get('storage_state_id') if engine == 'playwright' else None
-        if storage_state_id and not StorageState.objects.filter(pk=storage_state_id, project=test_suite.project).exists():
-            return Response({'error': '登录态不存在或不属于当前项目'}, status=status.HTTP_400_BAD_REQUEST)
+        if storage_state_id:
+            initial_state = StorageState.objects.filter(
+                pk=storage_state_id, project=test_suite.project
+            ).first()
+            if not initial_state:
+                return Response({'error': '登录态不存在或不属于当前项目'}, status=status.HTTP_400_BAD_REQUEST)
+            if not initial_state.file or not initial_state.file.storage.exists(initial_state.file.name):
+                return Response({'error': '登录态文件不存在，请重新上传或保存该登录态'}, status=status.HTTP_400_BAD_REQUEST)
 
         if engine == 'selenium':
             from .selenium_engine import SeleniumTestEngine

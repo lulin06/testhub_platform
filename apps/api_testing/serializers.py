@@ -92,6 +92,12 @@ class ApiCollectionSerializer(serializers.ModelSerializer):
         return ApiCollectionSerializer(children, many=True).data
 
 
+class ApiCollectionTreeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ApiCollection
+        fields = ['id', 'name', 'project', 'parent', 'order']
+
+
 class ApiRequestSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
     collection = serializers.PrimaryKeyRelatedField(
@@ -105,9 +111,7 @@ class ApiRequestSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'request_type', 'method', 'url',
             'headers', 'params', 'body', 'auth', 'pre_request_script',
-            'post_request_script', 'assertions', 'extractors',
-            'cookies', 'pre_actions', 'post_actions', 'settings',
-            'collection', 'order', 'created_by',
+            'post_request_script', 'assertions', 'extractors', 'collection', 'order', 'created_by',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -124,6 +128,12 @@ class ApiRequestSerializer(serializers.ModelSerializer):
                 validated_data['request_type'] = 'HTTP'
 
         return super().create(validated_data)
+
+
+class ApiRequestTreeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ApiRequest
+        fields = ['id', 'name', 'request_type', 'method', 'url', 'collection', 'order']
 
 
 class EnvironmentSerializer(serializers.ModelSerializer):
@@ -178,7 +188,7 @@ class TestSuiteRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TestSuiteRequest
-        fields = ['id', 'request', 'order', 'assertions', 'enabled']
+        fields = ['id', 'request', 'order', 'assertions', 'extractors', 'enabled']
 
 
 class TestSuiteSerializer(serializers.ModelSerializer):

@@ -723,7 +723,13 @@ class TestExecutor:
                     step_result['success'] = True
             elif step_data['action_type'] == 'assert' and step_data.get('assert_type') == 'urlContains':
                 expected_url = step_data.get('assert_value', '')
+                # 登录点击后的重定向是异步的，套件执行器也需要按步骤等待 URL 变化。
+                timeout_seconds = max(step_data.get('wait_time', 5000), 0) / 1000
+                deadline = time.monotonic() + timeout_seconds
                 actual_url = self.current_page.url
+                while expected_url and expected_url not in actual_url and time.monotonic() < deadline:
+                    self.current_page.wait_for_timeout(100)
+                    actual_url = self.current_page.url
                 step_result['success'] = bool(expected_url and expected_url in actual_url)
                 if not step_result['success']:
                     step_result['error'] = f"✗ 断言失败: URL不包含 '{expected_url}'\n  - 实际URL: '{actual_url}'"
@@ -1443,7 +1449,6 @@ class TestExecutor:
         import json
         import tempfile
         from pathlib import Path
-        from django.core.files.base import ContentFile
         from .models import StorageState
 
         operation = params.get('operation')
@@ -1466,9 +1471,7 @@ class TestExecutor:
             if name:
                 target.name = name
             target.source_url = self.current_page.url
-            target.file.save(f'{target.name}.json', ContentFile(raw), save=False)
-            target.file_size = len(raw)
-            target.save()
+            target.write_content(raw)
             return target
         # 切换和清除都重建上下文，保证认证数据按步骤隔离。
         if operation in {'switch', 'clear'}:
