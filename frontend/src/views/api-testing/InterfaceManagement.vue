@@ -20,8 +20,6 @@
               :placeholder="$t('apiTesting.interface.searchInterface')"
               size="small"
               clearable
-              @input="onSearchDebounced"
-              @keyup.enter="onSearch(searchKeyword)"
               style="flex: 1; min-width: 0;"
             >
               <template #prefix>
@@ -43,15 +41,16 @@
           </div>
         </div>
 
-        <div class="collection-tree" v-show="!searchKeyword || searchKeyword.trim() === ''">
+        <div class="collection-tree">
           <el-tree
             ref="treeRef"
-            :data="collections"
+            :data="visibleCollections"
+            :empty-text="searchKeyword.trim() ? $t('apiTesting.interface.noSearchResults') : $t('apiTesting.common.noData')"
             :props="treeProps"
             node-key="treeKey"
+            :default-expanded-keys="visibleExpandedKeys"
             :expand-on-click-node="false"
-            :default-expanded-keys="expandedKeys"
-            draggable
+            :draggable="!searchKeyword.trim()"
             :allow-drag="allowDrag"
             :allow-drop="allowDrop"
             @node-click="onNodeClick"
@@ -100,33 +99,6 @@
               </div>
             </template>
           </el-tree>
-
-          <!-- 搜索结果 -->
-          <div v-if="filteredCollections.length > 0" class="search-results">
-            <div class="search-results-header">
-              <span>{{ $t('apiTesting.interface.searchResults', { count: filteredCollections.length }) }}</span>
-              <el-button size="small" text @click="clearSearch">
-                <el-icon><Close /></el-icon>
-              </el-button>
-            </div>
-            <div class="search-results-list">
-              <div
-                v-for="item in filteredCollections"
-                :key="item.id"
-                class="search-result-item"
-                @click="selectSearchResult(item)"
-              >
-                <el-icon><Document /></el-icon>
-                <div class="search-result-content">
-                  <div class="search-result-name">{{ item.name }}</div>
-                  <div class="search-result-url">{{ item.url }}</div>
-                </div>
-                <el-tag v-if="item.matchType === 'name'" type="primary" size="small">{{ $t('apiTesting.interface.name') }}</el-tag>
-                <el-tag v-else-if="item.matchType === 'method'" type="warning" size="small">{{ $t('apiTesting.interface.method') }}</el-tag>
-                <el-tag v-else type="success" size="small">{{ $t('apiTesting.interface.url') }}</el-tag>
-              </div>
-            </div>
-          </div>
         </div>
           </div>
         </template>
@@ -400,206 +372,19 @@
               </el-tab-pane>
 
               <el-tab-pane :label="$t('apiTesting.interface.assertions')" name="assertions">
-                <div class="assertions-editor">
-                  <div class="assertions-header">
-                    <el-button size="small" type="primary" @click="addAssertion">
-                      <el-icon><Plus /></el-icon>
-                      {{ $t('apiTesting.interface.addAssertion') }}
-                    </el-button>
-                  </div>
+                <AssertionEditor
+                  v-model="selectedRequest.assertions"
+                  :show-helpers="true"
+                  @data-factory="({ assertion, field, index }) => openDataFactorySelector(assertion, field, index)"
+                  @variable-helper="({ assertion, field, index }) => openVariableHelperForAssertion(assertion, field, index)"
+                />
+              </el-tab-pane>
 
-                  <div class="assertions-list">
-                    <div
-                      v-for="(assertion, index) in selectedRequest.assertions"
-                      :key="index"
-                      class="assertion-item"
-                    >
-                      <div class="assertion-header">
-                        <el-input
-                          v-model="assertion.name"
-                          :placeholder="$t('apiTesting.interface.assertionName')"
-                          size="small"
-                          class="assertion-name"
-                        />
-                        <el-button
-                          size="small"
-                          type="danger"
-                          @click="removeAssertion(index)"
-                          circle
-                        >
-                          <el-icon><Delete /></el-icon>
-                        </el-button>
-                      </div>
-
-                      <div class="assertion-config">
-                        <el-select
-                          v-model="assertion.type"
-                          :placeholder="$t('apiTesting.interface.selectAssertionType')"
-                          size="small"
-                          @change="onAssertionTypeChange(assertion)"
-                        >
-                          <el-option :label="$t('apiTesting.interface.assertionTypes.statusCode')" value="status_code" />
-                          <el-option :label="$t('apiTesting.interface.assertionTypes.responseTime')" value="response_time" />
-                          <el-option :label="$t('apiTesting.interface.assertionTypes.contains')" value="contains" />
-                          <el-option :label="$t('apiTesting.interface.assertionTypes.jsonPath')" value="json_path" />
-                          <el-option :label="$t('apiTesting.interface.assertionTypes.header')" value="header" />
-                          <el-option :label="$t('apiTesting.interface.assertionTypes.equals')" value="equals" />
-                        </el-select>
-
-                        <div class="assertion-params" v-if="assertion.type">
-                          <!-- 状态码断言 -->
-                          <div v-if="assertion.type === 'status_code'">
-                            <el-input-number
-                              v-model="assertion.expected"
-                              :min="100"
-                              :max="599"
-                              size="small"
-                              :placeholder="$t('apiTesting.interface.expectedStatusCode')"
-                            />
-                          </div>
-
-                          <!-- 响应时间断言 -->
-                          <div v-else-if="assertion.type === 'response_time'">
-                            <el-input-number
-                              v-model="assertion.expected"
-                              :min="1"
-                              size="small"
-                              :placeholder="$t('apiTesting.interface.maxResponseTime')"
-                            />
-                          </div>
-
-                          <!-- 包含文本断言 -->
-                          <div v-else-if="assertion.type === 'contains'">
-                            <div style="display: flex; align-items: center; width: 100%">
-                              <el-input
-                                v-model="assertion.expected"
-                                :placeholder="$t('apiTesting.interface.expectedContains')"
-                                size="small"
-                                style="flex: 1"
-                              >
-                                <template #append>
-                                  <el-button
-                                    size="small"
-                                    :icon="MagicStick"
-                                    @click="openDataFactorySelector(assertion, 'expected', index)"
-                                    :title="$t('apiTesting.interface.referDataFactory')"
-                                    class="data-factory-btn"
-                                  />
-                                </template>
-                              </el-input>
-                              <el-tooltip :content="$t('apiTesting.interface.insertDynamicVariable')" placement="top">
-                                <el-button size="small" style="margin-left: 5px" @click="openVariableHelperForAssertion(assertion, 'expected', index)" class="variable-helper-btn">
-                                  <el-icon><MagicStick /></el-icon>
-                                </el-button>
-                              </el-tooltip>
-                            </div>
-                          </div>
-
-                          <!-- JSON路径断言 -->
-                          <div v-else-if="assertion.type === 'json_path'">
-                            <el-input
-                              v-model="assertion.json_path"
-                              :placeholder="$t('apiTesting.interface.jsonPathExample')"
-                              size="small"
-                              class="assertion-input"
-                            />
-                            <div style="display: flex; align-items: center; width: 100%">
-                              <el-input
-                                v-model="assertion.expected"
-                                :placeholder="$t('apiTesting.interface.expectedValue')"
-                                size="small"
-                                style="flex: 1"
-                              >
-                                <template #append>
-                                  <el-button
-                                    size="small"
-                                    :icon="MagicStick"
-                                    @click="openDataFactorySelector(assertion, 'expected', index)"
-                                    :title="$t('apiTesting.interface.referDataFactory')"
-                                    class="data-factory-btn"
-                                  />
-                                </template>
-                              </el-input>
-                              <el-tooltip :content="$t('apiTesting.interface.insertDynamicVariable')" placement="top">
-                                <el-button size="small" style="margin-left: 5px" @click="openVariableHelperForAssertion(assertion, 'expected', index)" class="variable-helper-btn">
-                                  <el-icon><MagicStick /></el-icon>
-                                </el-button>
-                              </el-tooltip>
-                            </div>
-                          </div>
-
-                          <!-- 响应头断言 -->
-                          <div v-else-if="assertion.type === 'header'">
-                            <el-input
-                              v-model="assertion.header_name"
-                              :placeholder="$t('apiTesting.interface.headerNameLabel')"
-                              size="small"
-                              class="assertion-input"
-                            />
-                            <div style="display: flex; align-items: center; width: 100%">
-                              <el-input
-                                v-model="assertion.expected_value"
-                                :placeholder="$t('apiTesting.interface.expectedValue')"
-                                size="small"
-                                style="flex: 1"
-                              >
-                                <template #append>
-                                  <el-button
-                                    size="small"
-                                    :icon="MagicStick"
-                                    @click="openDataFactorySelector(assertion, 'expected_value', index)"
-                                    :title="$t('apiTesting.interface.referDataFactory')"
-                                    class="data-factory-btn"
-                                  />
-                                </template>
-                              </el-input>
-                              <el-tooltip :content="$t('apiTesting.interface.insertDynamicVariable')" placement="top">
-                                <el-button size="small" style="margin-left: 5px" @click="openVariableHelperForAssertion(assertion, 'expected_value', index)" class="variable-helper-btn">
-                                  <el-icon><MagicStick /></el-icon>
-                                </el-button>
-                              </el-tooltip>
-                            </div>
-                          </div>
-
-                          <!-- 完全匹配断言 -->
-                          <div v-else-if="assertion.type === 'equals'">
-                            <div style="display: flex; align-items: center; width: 100%">
-                              <el-input
-                                v-model="assertion.expected"
-                                :placeholder="$t('apiTesting.interface.expectedMatch')"
-                                size="small"
-                                style="flex: 1"
-                              >
-                                <template #append>
-                                  <el-button
-                                    size="small"
-                                    :icon="MagicStick"
-                                    @click="openDataFactorySelector(assertion, 'expected', index)"
-                                    :title="$t('apiTesting.interface.referDataFactory')"
-                                    class="data-factory-btn"
-                                  />
-                                </template>
-                              </el-input>
-                              <el-tooltip :content="$t('apiTesting.interface.insertDynamicVariable')" placement="top">
-                                <el-button size="small" style="margin-left: 5px" @click="openVariableHelperForAssertion(assertion, 'expected', index)" class="variable-helper-btn">
-                                  <el-icon><MagicStick /></el-icon>
-                                </el-button>
-                              </el-tooltip>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div v-if="!selectedRequest.assertions || selectedRequest.assertions.length === 0" class="no-assertions">
-                      <p>{{ $t('apiTesting.interface.noAssertions') }}</p>
-                      <el-button size="small" type="primary" @click="addAssertion">
-                        <el-icon><Plus /></el-icon>
-                        {{ $t('apiTesting.interface.addFirstAssertion') }}
-                      </el-button>
-                    </div>
-                  </div>
-                </div>
+              <el-tab-pane :label="$t('apiTesting.interface.variableExtraction')" name="extractors">
+                <VariableExtractorEditor
+                  v-model="selectedRequest.extractors"
+                  :results="response?.extraction_results"
+                />
               </el-tab-pane>
             </template>
 
@@ -735,7 +520,7 @@
                           <pre>{{ jsonPathResult }}</pre>
                         </div>
                       </div>
-                      <div class="response-content" v-html="highlightedResponseBody"></div>
+                      <div ref="responseEditorHost" class="response-content"></div>
                     </div>
                   </el-tab-pane>
 
@@ -866,7 +651,16 @@
     </el-dialog>
 
     <!-- 右键菜单 -->
-    <ul v-show="showContextMenu" class="context-menu" :style="{ left: contextMenuX + 'px', top: contextMenuY + 'px' }">
+    <ul
+      ref="contextMenuRef"
+      v-show="showContextMenu"
+      class="context-menu"
+      :style="{
+        left: contextMenuX + 'px',
+        top: contextMenuY + 'px',
+        visibility: contextMenuReady ? 'visible' : 'hidden'
+      }"
+    >
       <li @click="addRequest">{{ $t('apiTesting.interface.contextMenu.addRequest') }}</li>
       <li @click="addCollection">{{ $t('apiTesting.interface.contextMenu.addSubCollection') }}</li>
       <li @click="editNode">{{ $t('apiTesting.interface.contextMenu.edit') }}</li>
@@ -1078,16 +872,22 @@
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Folder, Document, MagicStick, Search, Close, CopyDocument, Delete, Upload, UploadFilled, InfoFilled } from '@element-plus/icons-vue'
+import { Plus, Folder, Document, MagicStick, Search, CopyDocument, Delete, Upload, UploadFilled, InfoFilled } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 import KeyValueEditor from './components/KeyValueEditor.vue'
+import AssertionEditor from '@/components/api-testing/AssertionEditor.vue'
+import VariableExtractorEditor from '@/components/api-testing/VariableExtractorEditor.vue'
 import DataFactorySelector from '@/components/DataFactorySelector.vue'
 import { RequestModelParser } from '@/utils/requestModel'
 import { getVariableFunctions } from '@/api/data-factory'
+import { normalizeAssertions } from '@/utils/assertions'
 import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
 import { CodeGenerator } from '@/utils/codeGenerator'
-import { debounce } from 'lodash-es'
 import { useI18n } from 'vue-i18n'
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+import 'monaco-editor/esm/vs/language/json/monaco.contribution'
+import 'monaco-editor/esm/vs/editor/contrib/contextmenu/browser/contextmenu'
+import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard'
 
 const { t } = useI18n()
 const sidebarWidth = ref(300)
@@ -1114,21 +914,62 @@ const showEditCollectionDialog = ref(false)
 const showContextMenu = ref(false)
 const contextMenuX = ref(0)
 const contextMenuY = ref(0)
+const contextMenuRef = ref(null)
+const contextMenuReady = ref(false)
 const rightClickedNode = ref(null)
 const headersEditorRef = ref(null)
 const editingNodeId = ref(null)
 const editingNodeName = ref('')
 const editInputRef = ref(null)
 const rawBodyInputRef = ref(null)
+const responseEditorHost = ref(null)
 const currentHeaders = ref({})
+let responseEditor = null
 
 const searchKeyword = ref('')
-const filteredCollections = ref([])
-
 const treeProps = {
   children: 'children',
   label: 'name'
 }
+
+const visibleCollections = computed(() => {
+  const keyword = searchKeyword.value.trim().toLocaleLowerCase()
+  if (!keyword) return collections.value
+
+  const filterNodes = (nodes) => {
+    const matches = []
+    nodes.forEach(node => {
+      if (node.type === 'request') {
+        const isMatch = ['name', 'method', 'url'].some(field =>
+          String(node[field] || '').toLocaleLowerCase().includes(keyword)
+        )
+        if (isMatch) matches.push(node)
+        return
+      }
+
+      const children = filterNodes(node.children || [])
+      if (children.length) matches.push({ ...node, children })
+    })
+    return matches
+  }
+
+  return filterNodes(collections.value)
+})
+
+const visibleExpandedKeys = computed(() => {
+  if (!searchKeyword.value.trim()) return expandedKeys.value
+
+  const keys = []
+  const collectExpandedKeys = (nodes) => {
+    nodes.forEach(node => {
+      if (node.type !== 'collection') return
+      if (node.children?.length) keys.push(node.treeKey)
+      collectExpandedKeys(node.children || [])
+    })
+  }
+  collectExpandedKeys(visibleCollections.value)
+  return keys
+})
 
 // OpenAPI 路径参数使用单花括号，例如 /users/{id}；双花括号仍保留给环境变量。
 const getPathParameterNames = (url) => {
@@ -1368,43 +1209,15 @@ const rawBody = ref('')
 
 const availableMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'CONNECT', 'TRACE']
 
-const onSearchDebounced = debounce((value) => {
-  onSearch(value)
-}, 300)
-
-const onSearch = async (value) => {
-  if (!value || value.trim() === '') {
-    filteredCollections.value = []
-    return
-  }
-
-  try {
-    const response = await api.get('/api-testing/collections/search', {
-      params: {
-        project: selectedProject.value,
-        keyword: value
-      }
-    })
-    // 后端可能返回分页格式 { results: [...] } 或直接返回数组
-    filteredCollections.value = response.data.results || response.data || []
-  } catch (error) {
-    ElMessage.error('搜索失败')
-    console.error('搜索失败:', error)
-  }
-}
-
-const selectSearchResult = (item) => {
-  selectedRequest.value = item
-  searchKeyword.value = ''
-  filteredCollections.value = []
-}
-
 const onProjectChange = async (projectId) => {
   if (!projectId) return
 
   try {
-    await loadCollections(projectId)
-    await loadEnvironments(projectId)
+    clearSearch()
+    await Promise.all([
+      loadCollections(projectId),
+      loadEnvironments(projectId)
+    ])
   } catch (error) {
     ElMessage.error('切换项目失败')
     console.error('切换项目失败:', error)
@@ -1418,8 +1231,6 @@ const loadProjects = async () => {
     projects.value = response.data.results || response.data || []
     if (projects.value.length > 0) {
       selectedProject.value = getPreferredProjectId(projects.value, projects.value[0].id)
-      await loadCollections(selectedProject.value)
-      await loadEnvironments(selectedProject.value)
     }
   } catch (error) {
     ElMessage.error('加载项目失败')
@@ -1429,14 +1240,17 @@ const loadProjects = async () => {
 
 const loadCollections = async (projectId) => {
   try {
-    const collectionsData = await fetchAllPages('/api-testing/collections/', { project: projectId })
+    const [collectionsData, requests] = await Promise.all([
+      fetchAllPages('/api-testing/collections/', { project: projectId, tree: 1 }),
+      fetchAllPages('/api-testing/requests/', { project: projectId, tree: 1 })
+    ])
+
+    if (selectedProject.value !== projectId) return
 
     // 构建树形结构
     collections.value = buildTree(collectionsData)
     flatCollections.value = collectionsData
-
-    // 加载请求
-    await loadRequests()
+    attachRequestsToTree(requests)
   } catch (error) {
     ElMessage.error('加载集合失败')
     console.error('加载集合失败:', error)
@@ -1551,59 +1365,42 @@ const updateRequestTreeNode = (requestData) => {
 }
 
 const clearCollectionChildren = (collection) => {
-  if (collection.children) {
-    collection.children = collection.children.filter(child => child.type === 'collection')
-    collection.children.forEach(child => clearCollectionChildren(child))
-  }
+  collection.children = (collection.children || []).filter(child => child.type === 'collection')
+  collection.children.forEach(clearCollectionChildren)
 }
 
-const loadRequests = async () => {
-  if (!selectedProject.value) return
+const attachRequestsToTree = (requests) => {
+  collections.value = collections.value.filter(item => item.type === 'collection')
 
-  try {
-    const requests = await fetchAllPages('/api-testing/requests/', { project: selectedProject.value })
-
-    // 清空所有集合的子节点（请求）
-    collections.value.forEach(collection => {
+  const collectionMap = new Map()
+  const indexCollections = (items) => {
+    items.forEach(collection => {
+      if (collection.type !== 'collection') return
       clearCollectionChildren(collection)
+      collectionMap.set(String(collection.id), collection)
+      indexCollections(collection.children)
     })
-
-    // 过滤掉之前的未分类接口（type 为 request 且 id 为 null 的项）
-    collections.value = collections.value.filter(item => item.type === 'collection')
-
-    // 将请求添加到对应集合中或直接添加到根级别
-    requests.forEach(request => {
-      if (request.collection) {
-        // 有关联集合的请求，添加到对应集合下
-        const collection = findCollectionById(collections.value, request.collection)
-        if (collection) {
-          if (!collection.children) collection.children = []
-          const treeRequest = {
-            ...request,
-            type: 'request',
-            treeKey: `request:${request.id}`,
-            name: request.name
-          }
-          // 接口必须是叶节点，避免历史树状态中的 children 造成接口嵌套。
-          delete treeRequest.children
-          collection.children.push(treeRequest)
-        }
-      } else {
-        // 未关联集合的请求，直接添加到集合列表的根级别
-        const treeRequest = {
-          ...request,
-          type: 'request',
-          treeKey: `request:${request.id}`,
-          name: request.name
-        }
-        delete treeRequest.children
-        collections.value.push(treeRequest)
-      }
-    })
-  } catch (error) {
-    ElMessage.error('加载请求失败')
-    console.error('加载请求失败:', error)
   }
+  indexCollections(collections.value)
+
+  requests.forEach(request => {
+    const treeRequest = {
+      ...request,
+      type: 'request',
+      treeKey: `request:${request.id}`,
+      name: request.name
+    }
+    delete treeRequest.children
+
+    const collection = request.collection
+      ? collectionMap.get(String(request.collection))
+      : null
+    if (collection) {
+      collection.children.push(treeRequest)
+    } else if (!request.collection) {
+      collections.value.push(treeRequest)
+    }
+  })
 }
 
 const flattenCollections = (items, parent = null) => {
@@ -1619,100 +1416,127 @@ const flattenCollections = (items, parent = null) => {
   return result
 }
 
-const onNodeClick = async (data) => {
-  if (data.type === 'request') {
-    try {
-      const apiResponse = await api.get(`/api-testing/requests/${data.id}/`)
-      const requestData = apiResponse.data
+const selectRequest = (requestData) => {
+  // 搜索结果直接引用树节点，先复制一份，避免详情编辑转换参数格式时修改树数据。
+  requestData = JSON.parse(JSON.stringify(requestData))
+  delete requestData.type
+  delete requestData.treeKey
+  delete requestData.matchType
+  delete requestData.children
+  requestData.assertions = normalizeAssertions(requestData.assertions)
+  requestData.extractors = Array.isArray(requestData.extractors) ? requestData.extractors : []
 
-      // 初始化currentHeaders
-      currentHeaders.value = requestData.headers || {}
+  // 初始化currentHeaders
+  currentHeaders.value = requestData.headers || {}
 
-      // 将 params 从字典格式转换为数组格式
-      if (requestData.params && typeof requestData.params === 'object' && !Array.isArray(requestData.params)) {
-        const paramsArray = []
-        Object.keys(requestData.params).forEach(key => {
-          if (key && requestData.params[key] !== undefined) {
-            paramsArray.push({
-              enabled: true,
-              key,
-              value: requestData.params[key],
-              description: '',
-              type: 'text'
-            })
-          }
+  // 将 params 从字典格式转换为数组格式
+  if (requestData.params && typeof requestData.params === 'object' && !Array.isArray(requestData.params)) {
+    const paramsArray = []
+    Object.keys(requestData.params).forEach(key => {
+      if (key && requestData.params[key] !== undefined) {
+        paramsArray.push({
+          enabled: true,
+          key,
+          value: requestData.params[key],
+          description: '',
+          type: 'text'
         })
-        requestData.params = paramsArray
       }
+    })
+    requestData.params = paramsArray
+  }
 
-      syncPathParameterRows(requestData.url, requestData.params)
+  syncPathParameterRows(requestData.url, requestData.params)
 
-      // 将 headers 从字典格式转换为数组格式
-      if (requestData.headers && typeof requestData.headers === 'object' && !Array.isArray(requestData.headers)) {
-        const headersArray = []
-        Object.keys(requestData.headers).forEach(key => {
-          if (key && requestData.headers[key] !== undefined) {
-            headersArray.push({
-              enabled: true,
-              key,
-              value: requestData.headers[key],
-              description: '',
-              type: 'text'
-            })
-          }
+  // 将 headers 从字典格式转换为数组格式
+  if (requestData.headers && typeof requestData.headers === 'object' && !Array.isArray(requestData.headers)) {
+    const headersArray = []
+    Object.keys(requestData.headers).forEach(key => {
+      if (key && requestData.headers[key] !== undefined) {
+        headersArray.push({
+          enabled: true,
+          key,
+          value: requestData.headers[key],
+          description: '',
+          type: 'text'
         })
-        requestData.headers = headersArray
       }
+    })
+    requestData.headers = headersArray
+  }
 
-      // 解析body数据
-      if (requestData.body && requestData.body.type) {
-        if (requestData.body.type === 'json' && requestData.body.data) {
-          bodyType.value = 'raw'
-          rawType.value = 'json'
-          rawBody.value = JSON.stringify(requestData.body.data, null, 2)
-        } else if (requestData.body.type === 'raw' && requestData.body.data) {
-          bodyType.value = 'raw'
-          rawType.value = 'text'
-          rawBody.value = requestData.body.data
-        } else if (requestData.body.type === 'form-data') {
-          bodyType.value = 'form-data'
-          formData.value = requestData.body.data || []
-        } else if (requestData.body.type === 'x-www-form-urlencoded') {
-          bodyType.value = 'x-www-form-urlencoded'
-          formUrlEncoded.value = requestData.body.data || []
-        } else if (requestData.body.type === 'binary') {
-          bodyType.value = 'binary'
-        } else {
-          bodyType.value = 'none'
-          rawBody.value = ''
-        }
-      } else {
-        bodyType.value = 'none'
-        rawBody.value = ''
-      }
-
-      response.value = null
-      selectedRequest.value = requestData
-    } catch (error) {
-      ElMessage.error('加载请求失败')
-      console.error('加载请求失败:', error)
+  // 解析body数据
+  if (requestData.body && requestData.body.type) {
+    if (requestData.body.type === 'json' && requestData.body.data) {
+      bodyType.value = 'raw'
+      rawType.value = 'json'
+      rawBody.value = JSON.stringify(requestData.body.data, null, 2)
+    } else if (requestData.body.type === 'raw' && requestData.body.data) {
+      bodyType.value = 'raw'
+      rawType.value = 'text'
+      rawBody.value = requestData.body.data
+    } else if (requestData.body.type === 'form-data') {
+      bodyType.value = 'form-data'
+      formData.value = requestData.body.data || []
+    } else if (requestData.body.type === 'x-www-form-urlencoded') {
+      bodyType.value = 'x-www-form-urlencoded'
+      formUrlEncoded.value = requestData.body.data || []
+    } else if (requestData.body.type === 'binary') {
+      bodyType.value = 'binary'
+    } else {
+      bodyType.value = 'none'
+      rawBody.value = ''
     }
+  } else {
+    bodyType.value = 'none'
+    rawBody.value = ''
+  }
+
+  response.value = null
+  selectedRequest.value = requestData
+}
+
+const onNodeClick = async (data) => {
+  if (data.type !== 'request') return
+
+  try {
+    const apiResponse = await api.get(`/api-testing/requests/${data.id}/`)
+    selectRequest(apiResponse.data)
+  } catch (error) {
+    ElMessage.error('加载请求失败')
+    console.error('加载请求失败:', error)
   }
 }
 
-const onNodeRightClick = (event, node, treeNode) => {
+const onNodeRightClick = async (event, node) => {
   event.preventDefault()
+  contextMenuReady.value = false
   showContextMenu.value = true
   contextMenuX.value = event.clientX
   contextMenuY.value = event.clientY
   rightClickedNode.value = node
+
+  await nextTick()
+  const menu = contextMenuRef.value
+  if (!menu) return
+
+  // 根据菜单实际尺寸限制坐标，避免靠近窗口边缘时菜单被裁切。
+  const { width, height } = menu.getBoundingClientRect()
+  const margin = 8
+  const maxX = Math.max(margin, document.documentElement.clientWidth - width - margin)
+  const maxY = Math.max(margin, document.documentElement.clientHeight - height - margin)
+  contextMenuX.value = Math.min(Math.max(event.clientX, margin), maxX)
+  contextMenuY.value = Math.min(Math.max(event.clientY, margin), maxY)
+  contextMenuReady.value = true
 }
 
 const onNodeExpand = (node) => {
-  expandedKeys.value.push(node.treeKey)
+  if (searchKeyword.value.trim()) return
+  if (!expandedKeys.value.includes(node.treeKey)) expandedKeys.value.push(node.treeKey)
 }
 
 const onNodeCollapse = (node) => {
+  if (searchKeyword.value.trim()) return
   expandedKeys.value = expandedKeys.value.filter(key => key !== node.treeKey)
 }
 
@@ -1733,6 +1557,7 @@ const createEmptyRequest = () => {
     pre_request_script: '',
     post_request_script: '',
     assertions: [],
+    extractors: [],
     request_type: 'HTTP'
   }
 
@@ -1745,7 +1570,6 @@ const openCreateCollectionDialog = () => {
 
 const clearSearch = () => {
   searchKeyword.value = ''
-  filteredCollections.value = []
 }
 
 const closeCreateCollectionDialog = () => {
@@ -1788,6 +1612,7 @@ const addRequest = () => {
     pre_request_script: '',
     post_request_script: '',
     assertions: [],
+    extractors: [],
     request_type: 'HTTP'
   }
 
@@ -2075,20 +1900,207 @@ const convertKeyValueArrayToObject = (input) => {
   return obj
 }
 
-const highlightedResponseBody = computed(() => {
-  if (!responseBody.value) return ''
+const appendJsonPathKey = (parentPath, key) => {
+  // 只有合法标识符才使用点号语法，其余键名使用 JSONPath 下标语法。
+  return /^[A-Za-z_$][\w$]*$/.test(key)
+    ? `${parentPath}.${key}`
+    : `${parentPath}[${JSON.stringify(key)}]`
+}
+
+const buildJsonPathByLine = content => {
+  const linePaths = new Map()
+  if (!content) return linePaths
 
   try {
-    // 简单的 JSON 语法高亮
-    return responseBody.value
-      .replace(/"([^"]+)"\s*:/g, '<span style="color: #268bd2;">"$1"</span>:')
-      .replace(/:\s*"([^"]+)"/g, ': <span style="color: #2aa198;">"$1"</span>')
-      .replace(/:\s*(true|false|null)/g, ': <span style="color: #cb4b16;">$1</span>')
-      .replace(/:\s*([0-9]+(\.[0-9]+)?)/g, ': <span style="color: #d33682;">$1</span>')
-  } catch (e) {
-    return responseBody.value
+    JSON.parse(content)
+  } catch {
+    return linePaths
   }
-})
+
+  const stack = []
+  const lines = content.split('\n')
+  const propertyPattern = /^\s*"((?:\\.|[^"\\])*)"\s*:\s?(.*)$/
+
+  lines.forEach((line, lineIndex) => {
+    const trimmed = line.trim()
+    if (!trimmed) return
+
+    // 关闭行仍然归属于刚刚结束的对象/数组，便于用户点击任意一行都能得到路径。
+    if (trimmed.startsWith('}') || trimmed.startsWith(']')) {
+      linePaths.set(lineIndex + 1, stack.at(-1)?.path || '$')
+      stack.pop()
+      return
+    }
+
+    const propertyMatch = trimmed.match(propertyPattern)
+    if (propertyMatch) {
+      const key = JSON.parse(`"${propertyMatch[1]}"`)
+      const parent = stack.at(-1)
+      const path = appendJsonPathKey(parent?.path || '$', key)
+      linePaths.set(lineIndex + 1, path)
+      const value = propertyMatch[2].replace(/,$/, '').trim()
+      if (value.startsWith('{')) {
+        stack.push({ type: 'object', path })
+      } else if (value.startsWith('[')) {
+        stack.push({ type: 'array', path, index: 0 })
+      }
+      return
+    }
+
+    if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && stack.length === 0) {
+      linePaths.set(lineIndex + 1, '$')
+      stack.push({ type: trimmed.startsWith('[') ? 'array' : 'object', path: '$', index: 0 })
+      return
+    }
+
+    if (stack.length === 0) {
+      linePaths.set(lineIndex + 1, '$')
+      return
+    }
+
+    const parent = stack.at(-1)
+    if (parent?.type === 'array') {
+      const path = `${parent.path}[${parent.index}]`
+      linePaths.set(lineIndex + 1, path)
+      parent.index += 1
+      if (trimmed.startsWith('{')) {
+        stack.push({ type: 'object', path })
+      } else if (trimmed.startsWith('[')) {
+        stack.push({ type: 'array', path, index: 0 })
+      }
+    }
+  })
+
+  return linePaths
+}
+
+const responseJsonPathForLine = lineNumber => {
+  const linePaths = buildJsonPathByLine(responseBody.value)
+  return linePaths.get(lineNumber) || ''
+}
+
+const responseValueForLine = (editor, lineNumber) => {
+  try {
+    const jsonPath = responseJsonPathForLine(lineNumber)
+    if (!jsonPath) return null
+
+    let value = JSON.parse(responseBody.value)
+    const pathParts = jsonPath.match(/\.([A-Za-z_$][\w$]*)|\[(\d+)\]|\[("(?:\\.|[^"\\])*")\]/g) || []
+    for (const part of pathParts) {
+      if (part.startsWith('.')) {
+        value = value[part.slice(1)]
+      } else if (part.startsWith('["')) {
+        value = value[JSON.parse(part.slice(1, -1))]
+      } else {
+        value = value[Number(part.slice(1, -1))]
+      }
+    }
+
+    // 字符串按原始文本复制，其他类型使用合法 JSON 表示。
+    return typeof value === 'string' ? value : JSON.stringify(value) ?? null
+  } catch {
+    return null
+  }
+}
+
+const copyTextToClipboard = async (text, successMessage, failureMessage) => {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    ElMessage.success(successMessage)
+    return true
+  } catch {
+    ElMessage.error(failureMessage)
+    return false
+  }
+}
+
+const createResponseEditor = () => {
+  if (!responseEditorHost.value || responseEditor) return
+
+  responseEditor = monaco.editor.create(responseEditorHost.value, {
+    value: responseBody.value || '',
+    language: 'json',
+    theme: 'vs',
+    readOnly: true,
+    automaticLayout: true,
+    minimap: { enabled: false },
+    folding: true,
+    lineNumbers: 'on',
+    scrollBeyondLastLine: false,
+    contextmenu: true,
+    fontSize: 13,
+    lineHeight: 20,
+    padding: { top: 12, bottom: 12 }
+  })
+
+  responseEditor.addAction({
+    id: 'copy-response-value',
+    label: t('apiTesting.interface.copyValue'),
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: -2,
+    run: async editor => {
+      const selection = editor.getSelection()
+      const selectedValue = selection && !selection.isEmpty()
+        ? editor.getModel()?.getValueInRange(selection)
+        : null
+      const value = selectedValue ?? responseValueForLine(editor, editor.getPosition()?.lineNumber || 1)
+      if (value === null) {
+        ElMessage.warning(t('apiTesting.interface.valueUnavailable'))
+        return
+      }
+      await copyTextToClipboard(value, t('apiTesting.interface.valueCopied'), t('apiTesting.interface.copyFailed'))
+    }
+  })
+
+  responseEditor.addAction({
+    id: 'copy-response-json-path',
+    label: t('apiTesting.interface.copyJsonPath'),
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: -1,
+    run: async editor => {
+      const lineNumber = editor.getPosition()?.lineNumber || 1
+      const jsonPath = responseJsonPathForLine(lineNumber)
+      if (!jsonPath) {
+        ElMessage.warning(t('apiTesting.interface.jsonPathUnavailable'))
+        return
+      }
+      await copyTextToClipboard(
+        jsonPath,
+        t('apiTesting.interface.jsonPathCopied'),
+        t('apiTesting.interface.copyFailed')
+      )
+    }
+  })
+}
+
+const disposeResponseEditor = () => {
+  responseEditor?.dispose()
+  responseEditor = null
+}
+
+watch(responseBody, async content => {
+  await nextTick()
+  if (!response.value || !responseEditorHost.value) {
+    // 响应区域使用 v-if 渲染，切换接口时必须释放旧的 Monaco 实例。
+    disposeResponseEditor()
+    return
+  }
+  createResponseEditor()
+  if (responseEditor && responseEditor.getValue() !== content) {
+    responseEditor.setValue(content || '')
+  }
+}, { immediate: true })
 
 const getStatusType = (status) => {
   if (status >= 200 && status < 300) return 'success'
@@ -2106,8 +2118,11 @@ const sendRequest = async () => {
   try {
     sending.value = true
 
-    // 发送请求前先自动保存当前的修改
-    // await saveRequest()
+    // 新建接口需要先取得持久化 ID，才能复用现有执行和历史记录接口。
+    if (!selectedRequest.value.id) {
+      const saved = await saveRequest({ silent: true })
+      if (!saved || !selectedRequest.value?.id) return
+    }
 
     // 准备请求体数据
     let bodyData = {}
@@ -2156,6 +2171,7 @@ const sendRequest = async () => {
       method: selectedRequest.value.method,
       params: convertKeyValueArrayToObject(selectedRequest.value.params || []),
       headers: selectedRequest.value.headers,
+      extractors: selectedRequest.value.extractors || [],
       environment_id: selectedEnvironment.value
     }
     
@@ -2183,7 +2199,7 @@ const onHeadersUpdate = (headers) => {
   }
 }
 
-const saveRequest = async () => {
+const saveRequest = async (options = {}) => {
   if (!selectedRequest.value || !selectedRequest.value.url) {
     ElMessage.warning('请填写请求URL')
     return
@@ -2273,10 +2289,12 @@ const saveRequest = async () => {
 
     selectedRequest.value = response.data
     updateRequestTreeNode(response.data)
-    ElMessage.success('保存成功')
+    if (!options.silent) ElMessage.success('保存成功')
+    return true
   } catch (error) {
     ElMessage.error('保存失败')
     console.error('保存失败:', error)
+    return false
   } finally {
     saving.value = false
   }
@@ -2325,45 +2343,6 @@ const onBodyTypeChange = () => {
         data: null
       }
     }
-  }
-}
-
-const addAssertion = () => {
-  if (!selectedRequest.value) return
-
-  if (!selectedRequest.value.assertions) {
-    selectedRequest.value.assertions = []
-  }
-
-  selectedRequest.value.assertions.push({
-    name: `${t('apiTesting.interface.assertion')}${selectedRequest.value.assertions.length + 1}`,
-    type: 'status_code',
-    expected: 200
-  })
-}
-
-const removeAssertion = (index) => {
-  if (!selectedRequest.value || !selectedRequest.value.assertions) return
-
-  selectedRequest.value.assertions.splice(index, 1)
-}
-
-const onAssertionTypeChange = (assertion) => {
-  // 根据断言类型重置相关字段
-  if (assertion.type === 'status_code') {
-    assertion.expected = 200
-  } else if (assertion.type === 'response_time') {
-    assertion.expected = 1000
-  } else if (assertion.type === 'contains') {
-    assertion.expected = ''
-  } else if (assertion.type === 'json_path') {
-    assertion.json_path = ''
-    assertion.expected = ''
-  } else if (assertion.type === 'header') {
-    assertion.header_name = ''
-    assertion.expected_value = ''
-  } else if (assertion.type === 'equals') {
-    assertion.expected = ''
   }
 }
 
@@ -3079,17 +3058,21 @@ const loadVariableFunctions = async () => {
 // 生命周期钩子
 onMounted(async () => {
   await loadProjects()
-  await loadVariableFunctions()
+  const projectId = selectedProject.value
+  await Promise.all([
+    projectId ? loadCollections(projectId) : Promise.resolve(),
+    projectId ? loadEnvironments(projectId) : Promise.resolve(),
+    loadVariableFunctions()
+  ])
 
   // 添加全局点击事件监听器，用于隐藏右键菜单
   document.addEventListener('click', handleGlobalClick)
-  document.addEventListener('contextmenu', handleGlobalClick)
 })
 
 onBeforeUnmount(() => {
+  disposeResponseEditor()
   // 移除全局点击事件监听器
   document.removeEventListener('click', handleGlobalClick)
-  document.removeEventListener('contextmenu', handleGlobalClick)
 })
 
 // 处理全局点击事件，隐藏右键菜单
@@ -3439,72 +3422,6 @@ const useLocalVariableCategories = () => {
 }
 
 /* 搜索结果 */
-.search-results {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: white;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  z-index: 1000;
-  max-height: 400px;
-  overflow: auto;
-  margin-top: 8px;
-}
-
-.search-results-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e4e7ed;
-  background: #f8f9fa;
-  font-weight: 500;
-  color: #303133;
-}
-
-.search-results-list {
-  padding: 8px 0;
-}
-
-.search-result-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: background 0.2s;
-  border-bottom: 1px solid #f0f2f5;
-}
-
-.search-result-item:hover {
-  background: #ecf5ff;
-}
-
-.search-result-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.search-result-name {
-  font-weight: 500;
-  color: #303133;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 4px;
-}
-
-.search-result-url {
-  font-size: 12px;
-  color: #909399;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* 右侧主内容 */
 .main-content {
   flex: 1;
@@ -3871,15 +3788,10 @@ const useLocalVariableCategories = () => {
 
 /* 响应体 */
 .response-body {
-  padding: 24px;
+  padding: 10px;
   min-height: 400px;
   max-height: 600px;
   overflow: auto;
-  background: #f8f9fa;
-  border-radius: 10px;
-  margin: 20px;
-  border: 1px solid #e9ecef;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .response-actions {
@@ -3907,17 +3819,18 @@ const useLocalVariableCategories = () => {
 }
 
 .response-content {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 14px;
-  line-height: 1.6;
-  color: #303133;
+  height: 480px;
+  min-height: 320px;
   background: white;
-  padding: 20px 20px 20px 20px;
   border-radius: 8px;
   border: 1px solid #e9ecef;
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.05);
-  white-space: pre-wrap;
-  word-wrap: break-word;
+  overflow: hidden;
+}
+
+.response-content :deep(.monaco-editor),
+.response-content :deep(.monaco-editor .overflow-guard) {
+  border-radius: 8px;
 }
 
 /* 响应头 */
@@ -4172,94 +4085,6 @@ const useLocalVariableCategories = () => {
   font-family: 'Courier New', Courier, monospace;
   font-size: 14px;
   line-height: 1.6;
-}
-
-/* 断言编辑器 */
-.assertions-editor {
-  padding: 20px;
-  background: #f8f9fa;
-  border-radius: 12px;
-  border: 1px solid #e9ecef;
-}
-
-.assertions-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e9ecef;
-}
-
-.assertions-header .el-button {
-  border-radius: 8px;
-  background: #5046e5;
-  border: none;
-  font-weight: 500;
-  transition: all 0.2s ease;
-}
-
-.assertions-header .el-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(80, 70, 229, 0.4);
-  background: #4338ca;
-}
-
-.assertions-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* 断言项 */
-.assertion-item {
-  background: white;
-  border: 1px solid #e9ecef;
-  border-radius: 10px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s ease;
-}
-
-.assertion-item:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  border-color: #dee2e6;
-}
-
-.assertion-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.assertion-name {
-  flex: 1;
-  margin-right: 12px;
-  border-radius: 6px;
-}
-
-.assertion-config {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.assertion-config .el-select {
-  width: 200px;
-  border-radius: 6px;
-}
-
-.assertion-params {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.assertion-input {
-  margin-bottom: 12px;
-  border-radius: 6px;
 }
 
 /* 标签页按钮 */

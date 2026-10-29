@@ -137,14 +137,29 @@
                   {{ $t('apiTesting.automation.assertionCount', { n: scope.row.assertions?.length || 0 }) }}
                 </template>
               </el-table-column>
-              <el-table-column :label="$t('apiTesting.common.operation')" width="150">
+              <el-table-column :label="$t('apiTesting.interface.variableExtraction')" width="100">
                 <template #default="scope">
-                  <el-button link type="primary" @click="editAssertions(scope.row)" size="small">
-                    {{ $t('apiTesting.automation.editAssertions') }}
-                  </el-button>
-                  <el-button link type="danger" @click="removeRequest(scope.row)" size="small">
-                    {{ $t('apiTesting.automation.remove') }}
-                  </el-button>
+                  {{ scope.row.extractors?.length || 0 }}
+                </template>
+              </el-table-column>
+              <el-table-column :label="$t('apiTesting.common.operation')" width="170">
+                <template #default="scope">
+                  <el-button
+                    link
+                    size="small"
+                    :icon="ArrowUp"
+                    :disabled="scope.$index === 0"
+                    @click="moveRequest(scope.row, 'up')"
+                  />
+                  <el-button
+                    link
+                    size="small"
+                    :icon="ArrowDown"
+                    :disabled="scope.$index === selectedSuite.suite_requests.length - 1"
+                    @click="moveRequest(scope.row, 'down')"
+                  />
+                  <el-button link type="primary" size="small" :icon="Edit" @click="editRequestConfig(scope.row)" />
+                  <el-button link type="danger" size="small" :icon="Delete" @click="removeRequest(scope.row)" />
                 </template>
               </el-table-column>
             </el-table>
@@ -160,37 +175,43 @@
               </el-button>
             </div>
 
-            <el-table :data="executions" v-loading="executionsLoading">
-              <el-table-column prop="status" :label="$t('apiTesting.common.status')" width="100">
+            <el-table
+              class="execution-history-table"
+              :data="executions"
+              fit
+              height="100%"
+              v-loading="executionsLoading"
+            >
+              <el-table-column prop="status" :label="$t('apiTesting.common.status')" min-width="120">
                 <template #default="scope">
                   <el-tag :type="getStatusType(scope.row.status)">
                     {{ getStatusText(scope.row.status) }}
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="total_requests" :label="$t('apiTesting.automation.totalRequests')" width="100" />
-              <el-table-column prop="passed_requests" :label="$t('apiTesting.automation.passedCount')" width="100">
+              <el-table-column prop="total_requests" :label="$t('apiTesting.automation.totalRequests')" min-width="120" />
+              <el-table-column prop="passed_requests" :label="$t('apiTesting.automation.passedCount')" min-width="120">
                 <template #default="scope">
                   <span style="color: #67c23a">{{ scope.row.passed_requests }}</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="failed_requests" :label="$t('apiTesting.automation.failedCount')" width="100">
+              <el-table-column prop="failed_requests" :label="$t('apiTesting.automation.failedCount')" min-width="120">
                 <template #default="scope">
                   <span style="color: #f56c6c">{{ scope.row.failed_requests }}</span>
                 </template>
               </el-table-column>
-              <el-table-column :label="$t('apiTesting.automation.averageTime')" width="120">
+              <el-table-column :label="$t('apiTesting.automation.averageTime')" min-width="140">
                 <template #default="scope">
                   {{ getAverageExecutionTime(scope.row) }}
                 </template>
               </el-table-column>
-              <el-table-column prop="executed_by.username" :label="$t('apiTesting.automation.executor')" width="120" />
-              <el-table-column prop="created_at" :label="$t('apiTesting.automation.executionTime')" width="160">
+              <el-table-column prop="executed_by.username" :label="$t('apiTesting.automation.executor')" min-width="140" />
+              <el-table-column prop="created_at" :label="$t('apiTesting.automation.executionTime')" min-width="180">
                 <template #default="scope">
                   {{ formatDate(scope.row.created_at) }}
                 </template>
               </el-table-column>
-              <el-table-column :label="$t('apiTesting.common.operation')" width="120">
+              <el-table-column :label="$t('apiTesting.common.operation')" min-width="180">
                 <template #default="scope">
                   <el-button link type="primary" @click="viewExecutionDetail(scope.row)" size="small">
                     {{ $t('apiTesting.automation.viewDetails') }}
@@ -271,11 +292,23 @@
       :close-on-click-modal="false"
     >
       <div class="add-request-content">
+        <el-input
+          v-model="requestSearchKeyword"
+          :placeholder="$t('apiTesting.interface.searchInterface')"
+          clearable
+          class="request-search"
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
         <div class="request-selector">
           <el-tree
             ref="requestTreeRef"
             :data="requestTree"
             :props="requestTreeProps"
+            :filter-node-method="filterRequestTreeNode"
+            :empty-text="requestSearchKeyword.trim() ? '' : $t('apiTesting.common.noData')"
             show-checkbox
             node-key="id"
             :check-on-click-node="false"
@@ -296,6 +329,12 @@
               </div>
             </template>
           </el-tree>
+          <div
+            v-if="requestSearchKeyword.trim() && !requestSearchHasMatches"
+            class="request-search-empty"
+          >
+            {{ $t('apiTesting.interface.noSearchResults') }}
+          </div>
         </div>
       </div>
       
@@ -303,6 +342,29 @@
         <el-button @click="showAddRequestDialog = false">{{ $t('apiTesting.common.cancel') }}</el-button>
         <el-button type="primary" @click="addSelectedRequests" :loading="addingRequests">
           {{ $t('apiTesting.automation.addSelectedRequests') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 套件请求配置，复用接口管理中的断言和变量提取编辑器 -->
+    <el-dialog
+      v-model="showAssertionDialog"
+      :title="$t('apiTesting.automation.requestConfig')"
+      width="860px"
+      :close-on-click-modal="false"
+    >
+      <el-tabs v-model="requestConfigTab">
+        <el-tab-pane :label="$t('apiTesting.interface.assertions')" name="assertions">
+          <AssertionEditor v-model="assertionDraft" compact />
+        </el-tab-pane>
+        <el-tab-pane :label="$t('apiTesting.interface.variableExtraction')" name="extractors">
+          <VariableExtractorEditor v-model="extractorDraft" compact :show-title="false" />
+        </el-tab-pane>
+      </el-tabs>
+      <template #footer>
+        <el-button @click="showAssertionDialog = false">{{ $t('apiTesting.common.cancel') }}</el-button>
+        <el-button type="primary" :loading="savingAssertions" @click="saveSuiteAssertions">
+          {{ $t('apiTesting.common.save') }}
         </el-button>
       </template>
     </el-dialog>
@@ -370,16 +432,19 @@
 
 <script setup>
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
-import { ref, reactive, onMounted, computed, nextTick } from 'vue'
+import { ref, reactive, onMounted, computed, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import {
-  Plus, Refresh, MoreFilled, VideoPlay, Edit,
-  Folder, Document
+  Plus, Refresh, MoreFilled, VideoPlay, Edit, Search,
+  Folder, Document, ArrowUp, ArrowDown, Delete
 } from '@element-plus/icons-vue'
+import AssertionEditor from '@/components/api-testing/AssertionEditor.vue'
+import VariableExtractorEditor from '@/components/api-testing/VariableExtractorEditor.vue'
 import api from '@/utils/api'
 import dayjs from 'dayjs'
 import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
+import { normalizeAssertions, stripLegacyAssertionValue } from '@/utils/assertions'
 
 const { t } = useI18n()
 const sidebarWidth = ref(300)
@@ -392,15 +457,22 @@ const selectedSuite = ref(null)
 const executions = ref([])
 const environments = ref([])
 const requestTree = ref([])
+const requestSearchKeyword = ref('')
 const running = ref(false)
 const executionsLoading = ref(false)
 const showCreateSuiteDialog = ref(false)
 const showAddRequestDialog = ref(false)
+const showAssertionDialog = ref(false)
 const showExecutionDialog = ref(false)
 const editingSuite = ref(null)
 const submittingSuite = ref(false)
 const addingRequests = ref(false)
+const savingAssertions = ref(false)
 const currentExecution = ref(null)
+const editingSuiteRequest = ref(null)
+const assertionDraft = ref([])
+const extractorDraft = ref([])
+const requestConfigTab = ref('assertions')
 const suiteFormRef = ref()
 const requestTreeRef = ref()
 
@@ -420,6 +492,58 @@ const requestTreeProps = {
   children: 'children',
   label: 'name'
 }
+
+// 搜索范围与接口管理页保持一致，并保留包含命中接口的父集合。
+const requestMatchesKeyword = (request, keyword) => {
+  return ['name', 'method', 'url'].some(field =>
+    String(request[field] || '').toLocaleLowerCase().includes(keyword)
+  )
+}
+
+const collectionHasMatchingRequest = (collection, keyword) => {
+  return (collection.children || []).some(child => {
+    if (child.type === 'request') return requestMatchesKeyword(child, keyword)
+    return collectionHasMatchingRequest(child, keyword)
+  })
+}
+
+const requestTreeHasMatchingRequest = (nodes, keyword) => {
+  return nodes.some(node => {
+    if (node.type === 'request') return requestMatchesKeyword(node, keyword)
+    return collectionHasMatchingRequest(node, keyword)
+  })
+}
+
+const requestSearchHasMatches = computed(() => {
+  const keyword = requestSearchKeyword.value.trim().toLocaleLowerCase()
+  return !keyword || requestTreeHasMatchingRequest(requestTree.value, keyword)
+})
+
+const filterRequestTreeNode = (keyword, data) => {
+  const normalizedKeyword = String(keyword || '').trim().toLocaleLowerCase()
+  if (!normalizedKeyword) return true
+  if (data.type === 'request') return requestMatchesKeyword(data, normalizedKeyword)
+  return collectionHasMatchingRequest(data, normalizedKeyword)
+}
+
+const expandMatchingCollections = (collections, keyword) => {
+  collections.forEach(collection => {
+    if (collection.type !== 'collection') return
+    if (collectionHasMatchingRequest(collection, keyword)) {
+      requestTreeRef.value?.getNode(collection.id)?.expand()
+    }
+    expandMatchingCollections(collection.children || [], keyword)
+  })
+}
+
+watch(requestSearchKeyword, async (keyword) => {
+  await nextTick()
+  if (!requestTreeRef.value) return
+
+  const normalizedKeyword = keyword.trim().toLocaleLowerCase()
+  requestTreeRef.value.filter(normalizedKeyword)
+  if (normalizedKeyword) expandMatchingCollections(requestTree.value, normalizedKeyword)
+})
 
 const httpProjects = computed(() => {
   return projects.value.filter(project => project.project_type !== 'WEBSOCKET')
@@ -548,25 +672,43 @@ const loadEnvironments = async () => {
 }
 
 const loadRequestTree = async () => {
-  if (!selectedProject.value) return
+  const projectId = selectedProject.value
+  if (!projectId) {
+    requestTree.value = []
+    return
+  }
 
+  requestTree.value = []
   try {
-    // 加载集合
-    const collectionsRes = await api.get('/api-testing/collections/', {
-      params: { project: selectedProject.value }
-    })
-    const collections = collectionsRes.data.results || collectionsRes.data
-
-    // 加载请求，传递project参数
-    const requestsRes = await api.get('/api-testing/requests/', {
-      params: { project: selectedProject.value }
-    })
-    const requests = requestsRes.data.results || requestsRes.data
+    const [collections, requests] = await Promise.all([
+      fetchAllPages('/api-testing/collections/', { project: projectId, tree: 1 }),
+      fetchAllPages('/api-testing/requests/', { project: projectId, tree: 1 })
+    ])
 
     // 构建树形结构
-    requestTree.value = buildRequestTree(collections, requests)
+    if (selectedProject.value === projectId) {
+      requestTree.value = buildRequestTree(collections, requests)
+    }
   } catch (error) {
-    ElMessage.error(t('apiTesting.messages.error.loadRequestTree'))
+    if (selectedProject.value === projectId) {
+      ElMessage.error(t('apiTesting.messages.error.loadRequestTree'))
+    }
+  }
+}
+
+// 读取 DRF 分页接口的全部数据，避免套件弹窗只显示接口树的第一页。
+const fetchAllPages = async (url, params = {}) => {
+  const results = []
+  let page = 1
+  while (true) {
+    const response = await api.get(url, {
+      params: { ...params, page, page_size: 1500 }
+    })
+    const data = response.data
+    if (Array.isArray(data)) return data
+    results.push(...(data.results || []))
+    if (!data.next) return results
+    page += 1
   }
 }
 
@@ -630,6 +772,7 @@ const loadExecutions = async () => {
 }
 
 const onProjectChange = async () => {
+  requestSearchKeyword.value = ''
   // 检查选中的项目是否为HTTP项目
   const selectedProjectData = projects.value.find(p => p.id === selectedProject.value)
   if (selectedProjectData && selectedProjectData.project_type === 'WEBSOCKET') {
@@ -681,7 +824,11 @@ const runTestSuite = async (suite) => {
     currentExecution.value = response.data
     showExecutionDialog.value = true
     await loadExecutions()
-    ElMessage.success(t('apiTesting.messages.success.suiteExecuted'))
+    if (response.data.status === 'FAILED') {
+      ElMessage.error(t('apiTesting.messages.error.suiteExecutionFailed'))
+    } else {
+      ElMessage.success(t('apiTesting.messages.success.suiteExecuted'))
+    }
   } catch (error) {
     ElMessage.error(t('apiTesting.messages.error.executeSuite'))
   } finally {
@@ -778,6 +925,7 @@ const resetSuiteForm = () => {
 }
 
 const showAddRequest = async () => {
+  requestSearchKeyword.value = ''
   await loadRequestTree()
   showAddRequestDialog.value = true
   
@@ -842,8 +990,40 @@ const updateRequestEnabled = async (suiteRequest) => {
   }
 }
 
-const editAssertions = (suiteRequest) => {
-  ElMessage.info(t('apiTesting.messages.info.featureInDevelopment'))
+const editRequestConfig = (suiteRequest) => {
+  editingSuiteRequest.value = suiteRequest
+  assertionDraft.value = normalizeAssertions(suiteRequest.assertions)
+  extractorDraft.value = JSON.parse(JSON.stringify(suiteRequest.extractors || suiteRequest.request?.extractors || []))
+  requestConfigTab.value = 'assertions'
+  showAssertionDialog.value = true
+}
+
+const saveSuiteAssertions = async () => {
+  if (!editingSuiteRequest.value) return
+
+  savingAssertions.value = true
+  try {
+    const assertions = assertionDraft.value.map(stripLegacyAssertionValue)
+    const extractors = extractorDraft.value
+    await api.patch(`/api-testing/test-suite-requests/${editingSuiteRequest.value.id}/`, { assertions, extractors })
+    editingSuiteRequest.value.assertions = assertions
+    editingSuiteRequest.value.extractors = extractors
+    showAssertionDialog.value = false
+    ElMessage.success(t('apiTesting.messages.success.requestConfigSaved'))
+  } catch (error) {
+    ElMessage.error(t('apiTesting.messages.error.saveRequestConfigFailed'))
+  } finally {
+    savingAssertions.value = false
+  }
+}
+
+const moveRequest = async (suiteRequest, direction) => {
+  try {
+    await api.post(`/api-testing/test-suite-requests/${suiteRequest.id}/move/`, { direction })
+    await reloadCurrentSuite()
+  } catch (error) {
+    ElMessage.error(t('apiTesting.messages.error.reorderFailed'))
+  }
 }
 
 const removeRequest = async (suiteRequest) => {
@@ -1012,8 +1192,11 @@ onMounted(() => {
 
 .suite-detail {
   flex: 1;
+  min-height: 0;
   padding: 20px;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .suite-header {
@@ -1058,6 +1241,23 @@ onMounted(() => {
   margin-bottom: 30px;
 }
 
+.requests-section {
+  flex: 0 0 auto;
+}
+
+.executions-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.execution-history-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
 .section-header {
   display: flex;
   justify-content: space-between;
@@ -1073,7 +1273,23 @@ onMounted(() => {
 
 .add-request-content {
   max-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.request-search {
+  margin-bottom: 12px;
+}
+
+.request-selector {
+  min-height: 0;
   overflow-y: auto;
+}
+
+.request-search-empty {
+  padding: 24px 0;
+  color: #909399;
+  text-align: center;
 }
 
 .request-tree-node {

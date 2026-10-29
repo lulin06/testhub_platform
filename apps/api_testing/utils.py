@@ -1,9 +1,120 @@
 import json
 import time
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from django.utils import timezone
 from .models import RequestHistory
 from .variable_resolver import VariableResolver
 from .path_params import resolve_path_parameters
+
+
+def _api_request_retry(method):
+    """Retry short-lived connection failures only for idempotent HTTP methods."""
+    retry_methods = frozenset({'GET', 'HEAD', 'OPTIONS'})
+    retry_count = 2 if str(method).upper() in retry_methods else 0
+    return Retry(
+        total=retry_count,
+        connect=retry_count,
+        read=0,
+        status=0,
+        backoff_factor=0.2,
+        allowed_methods=retry_methods,
+        raise_on_status=False,
+    )
+
+
+def send_api_request(*, method, url, headers=None, params=None, body_type='none', body=None,
+                     timeout=(5, 30)):
+    """统一发送 API 请求，连接阶段短暂失败时仅对幂等方法有限重试。
+
+    套件执行与单接口执行必须使用同一套 HTTP 策略；写请求不自动重试，避免重复提交。
+    """
+    request_kwargs = {
+        'method': method,
+        'url': url,
+        'headers': headers or {},
+        'params': params or {},
+        'timeout': timeout,
+    }
+    if body_type == 'raw':
+        request_kwargs['data'] = body
+    elif body_type in {'json', 'form-data', 'x-www-form-urlencoded'}:
+        request_kwargs['json'] = body
+    with requests.Session() as session:
+        adapter = HTTPAdapter(max_retries=_api_request_retry(method))
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        return session.request(**request_kwargs)
+
+
+def prepare_request_body(request_body, method, variables, resolver):
+    """按接口配置解析请求体，并返回发送类型与内容。"""
+    if not request_body or method.upper() not in {'POST', 'PUT', 'PATCH'}:
+        return 'none', None
+    body_type = request_body.get('type', 'none')
+    body_content = request_body.get('data')
+    if body_type == 'json' and isinstance(body_content, dict):
+        body_content = _resolve_variables_in_dict(_replace_variables_in_dict(body_content, variables), resolver)
+    elif body_type == 'raw' and isinstance(body_content, str):
+        body_content = resolver.resolve(_replace_variables(body_content, variables))
+    elif body_type in {'form-data', 'x-www-form-urlencoded'} and isinstance(body_content, list):
+        body_content = _resolve_variables_in_dict(_replace_variables_in_dict(body_content, variables), resolver)
+    return body_type, body_content
+
+
+def normalize_suite_assertions(assertions, response_time=None):
+    """兼容套件旧版 value 字段，并将套件断言转换为统一断言格式。"""
+    normalized = []
+    for assertion in assertions or []:
+        item = dict(assertion)
+        if 'expected' not in item and 'value' in item:
+            item['expected'] = item['value']
+        if item.get('type') == 'response_time' and response_time is not None:
+            item['actual_time'] = response_time
+        normalized.append(item)
+    return normalized
+
+
+def extract_response_variables(response, extractors):
+    """从 JSON 响应中按接口配置提取变量，并返回逐条结果和变量映射。"""
+    results = []
+    extracted = {}
+    response_json = None
+    response_json_loaded = False
+
+    for extractor in extractors or []:
+        if not isinstance(extractor, dict) or extractor.get('enabled') is False:
+            continue
+
+        name = str(extractor.get('name') or '').strip()
+        expression = str(extractor.get('expression') or '').strip()
+        result = {'name': name, 'expression': expression, 'success': False, 'value': None, 'error': ''}
+        try:
+            if not name:
+                raise ValueError('变量名不能为空')
+            if not expression:
+                raise ValueError('JSONPath 表达式不能为空')
+            if not response_json_loaded:
+                response_json = json.loads(response.text or '')
+                response_json_loaded = True
+
+            from jsonpath_ng import parse
+            matches = parse(expression).find(response_json)
+            if matches:
+                value = matches[0].value
+            elif extractor.get('default_value') not in (None, ''):
+                value = extractor.get('default_value')
+            else:
+                raise ValueError('未匹配到响应数据，且未设置默认值')
+
+            result.update(success=True, value=value)
+            extracted[name] = value
+        except Exception as error:
+            result['error'] = str(error)
+        results.append(result)
+
+    return results, extracted
 
 
 def execute_assertions(response, assertions):
@@ -109,8 +220,6 @@ def execute_assertions(response, assertions):
 def execute_test_suite(test_suite, environment, executed_by):
     """执行测试套件并返回结果"""
     from .models import TestExecution, RequestHistory
-    import requests
-    import time
     
     try:
         # 创建变量解析器
@@ -135,14 +244,13 @@ def execute_test_suite(test_suite, environment, executed_by):
         failed_count = 0
         
         # 执行每个请求
+        suite_variables = dict(environment.variables or {}) if environment else {}
         for suite_request in suite_requests:
             api_request = suite_request.request
             
             try:
                 # 解析环境变量
-                variables = {}
-                if environment:
-                    variables.update(environment.variables)
+                variables = dict(suite_variables)
                 
                 # 替换URL中的变量（先解析动态函数，再替换环境变量）
                 url = _replace_variables(api_request.url, variables)
@@ -171,28 +279,31 @@ def execute_test_suite(test_suite, environment, executed_by):
                 url, params = resolve_path_parameters(url, params)
                 
                 # 准备请求体
-                body_data = None
-                if api_request.body and api_request.method in ['POST', 'PUT', 'PATCH']:
-                    if api_request.body.get('type') == 'json':
-                        body_data = api_request.body.get('data', {})
-                        body_data = _replace_variables_in_dict(body_data, variables)
-                        body_data = _resolve_variables_in_dict(body_data, resolver)
+                body_type, body_data = prepare_request_body(
+                    api_request.body, api_request.method, variables, resolver
+                )
                 
                 # 执行请求
                 start_time = time.time()
-                response = requests.request(
+                response = send_api_request(
                     method=api_request.method,
                     url=url,
                     headers=headers,
                     params=params,
-                    json=body_data,
-                    timeout=30
+                    body_type=body_type,
+                    body=body_data,
                 )
                 end_time = time.time()
                 response_time = (end_time - start_time) * 1000
+                _, extracted_variables = extract_response_variables(
+                    response,
+                    suite_request.extractors,
+                )
+                variables.update(extracted_variables)
+                suite_variables.update(extracted_variables)
                 
-                # 执行断言验证
-                assertions = api_request.assertions or []
+                # 套件请求配置是执行时的唯一断言来源，允许在套件内独立编辑。
+                assertions = normalize_suite_assertions(suite_request.assertions, response_time)
                 for assertion in assertions:
                     if assertion.get('type') == 'response_time':
                         assertion['actual_time'] = response_time
@@ -203,22 +314,14 @@ def execute_test_suite(test_suite, environment, executed_by):
                 passed = True
                 error_message = ''
                 
-                # 检查套件请求的断言
-                for assertion in suite_request.assertions:
-                    if assertion.get('type') == 'status_code':
-                        expected = assertion.get('value')
-                        if response.status_code != expected:
-                            passed = False
-                            error_message = f'状态码断言失败: 期望 {expected}, 实际 {response.status_code}'
-                            break
-                
-                # 检查接口自身的断言
-                if passed and assertions_results:
-                    for assertion_result in assertions_results:
-                        if not assertion_result.get('passed', True):
-                            passed = False
-                            error_message = f"断言失败: {assertion_result.get('name', '未命名断言')} - {assertion_result.get('error', '断言不通过')}"
-                            break
+                for assertion_result in assertions_results:
+                    if not assertion_result.get('passed', True):
+                        passed = False
+                        error_message = (
+                            f"断言失败: {assertion_result.get('name', '未命名断言')} - "
+                            f"{assertion_result.get('error') or '断言不通过'}"
+                        )
+                        break
                 
                 if passed:
                     passed_count += 1
@@ -294,8 +397,6 @@ def execute_test_suite(test_suite, environment, executed_by):
 
 def execute_api_request(api_request, environment, executed_by):
     """执行单个API请求并返回结果"""
-    import requests
-    import time
     
     try:
         # 创建变量解析器
@@ -333,22 +434,19 @@ def execute_api_request(api_request, environment, executed_by):
         url, params = resolve_path_parameters(url, params)
         
         # 准备请求体
-        body_data = None
-        if api_request.body and api_request.method in ['POST', 'PUT', 'PATCH']:
-            if api_request.body.get('type') == 'json':
-                body_data = api_request.body.get('data', {})
-                body_data = _replace_variables_in_dict(body_data, variables)
-                body_data = _resolve_variables_in_dict(body_data, resolver)
+        body_type, body_data = prepare_request_body(
+            api_request.body, api_request.method, variables, resolver
+        )
         
         # 执行请求
         start_time = time.time()
-        response = requests.request(
+        response = send_api_request(
             method=api_request.method,
             url=url,
             headers=headers,
             params=params,
-            json=body_data,
-            timeout=30
+            body_type=body_type,
+            body=body_data,
         )
         end_time = time.time()
         response_time = (end_time - start_time) * 1000
@@ -360,6 +458,8 @@ def execute_api_request(api_request, environment, executed_by):
                 assertion['actual_time'] = response_time
         
         assertions_results = execute_assertions(response, assertions)
+        # 单接口提取结果只随本次执行返回，不写回环境变量。
+        extraction_results, extracted_variables = extract_response_variables(response, api_request.extractors)
         
         # 保存请求历史
         history = RequestHistory.objects.create(
@@ -389,6 +489,8 @@ def execute_api_request(api_request, environment, executed_by):
             'status_code': response.status_code,
             'response_time': response_time,
             'assertions_results': assertions_results,
+            'extraction_results': extraction_results,
+            'extracted_variables': extracted_variables,
             'response_data': {
                 'headers': dict(response.headers),
                 'body': response.text,
