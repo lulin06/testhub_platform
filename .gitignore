@@ -49,7 +49,7 @@ media/testcase_imports
 media/testcase_import_failures
 
 #忽略用例附件上传的文件
-media/testcase_attachments
+media/testcase_attachments/*
 
 
 # 忽略接口测试运行时产生的 Allure 报告文件，但保留.gitkeep文件

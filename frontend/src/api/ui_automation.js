@@ -21,7 +21,13 @@ export function getUiProjects(params) {
 
 // 登录态资源管理接口：列表、上传、编辑、下载和删除均按项目范围调用。
 export const getStorageStates = params => request({ url: '/ui-automation/storage-states/', method: 'get', params })
-export const createStorageState = data => request({ url: '/ui-automation/storage-states/', method: 'post', data })
+// 登录态创建使用 FormData 上传 JSON 文件，需覆盖全局 JSON 请求头。
+export const createStorageState = data => request({
+  url: '/ui-automation/storage-states/',
+  method: 'post',
+  data,
+  headers: { 'Content-Type': 'multipart/form-data' }
+})
 export const updateStorageState = (id, data) => request({ url: `/ui-automation/storage-states/${id}/`, method: 'patch', data })
 export const deleteStorageState = id => request({ url: `/ui-automation/storage-states/${id}/`, method: 'delete' })
 export const downloadStorageState = id => request({ url: `/ui-automation/storage-states/${id}/download/`, method: 'get', responseType: 'blob' })

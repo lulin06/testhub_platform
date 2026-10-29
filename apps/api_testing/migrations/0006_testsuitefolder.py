@@ -4,22 +4,6 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
-def create_legacy_folders(apps, schema_editor):
-    TestSuite = apps.get_model('api_testing', 'TestSuite')
-    TestSuiteFolder = apps.get_model('api_testing', 'TestSuiteFolder')
-    db_alias = schema_editor.connection.alias
-
-    for project_id, folder_path in TestSuite.objects.using(db_alias).exclude(folder='').values_list(
-        'project_id', 'folder'
-    ).distinct():
-        parts = folder_path.split('/')
-        for index in range(1, len(parts) + 1):
-            TestSuiteFolder.objects.using(db_alias).get_or_create(
-                project_id=project_id,
-                path='/'.join(parts[:index]),
-            )
-
-
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -44,5 +28,4 @@ class Migration(migrations.Migration):
                 'constraints': [models.UniqueConstraint(fields=('project', 'path'), name='unique_test_suite_folder_path')],
             },
         ),
-        migrations.RunPython(create_legacy_folders, migrations.RunPython.noop),
     ]
