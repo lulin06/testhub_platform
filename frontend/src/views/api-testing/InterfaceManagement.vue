@@ -28,12 +28,18 @@
                 <el-icon><Search /></el-icon>
               </template>
             </el-input>
-            <el-button type="primary" size="small" @click="openCreateCollectionDialog" :title="$t('apiTesting.interface.createCollection')">
-              <el-icon><Folder /></el-icon>
-            </el-button>
-            <el-button type="success" size="small" @click="createEmptyRequest" :title="$t('apiTesting.interface.addInterface')">
-              <el-icon><Plus /></el-icon>
-            </el-button>
+            <div class="interface-header-actions">
+              <el-button type="primary" size="small" @click="openCreateCollectionDialog" :title="$t('apiTesting.interface.createCollection')">
+                <el-icon><Folder /></el-icon>
+              </el-button>
+              <el-button type="success" size="small" @click="createEmptyRequest" :title="$t('apiTesting.interface.addInterface')">
+                <el-icon><Plus /></el-icon>
+              </el-button>
+              <el-button size="small" @click="openBatchImport" :title="$t('apiTesting.interface.importBatch.importTitle')">
+                <el-icon><Upload /></el-icon>
+                {{ $t('apiTesting.common.import') }}
+              </el-button>
+            </div>
           </div>
         </div>
 
@@ -42,7 +48,7 @@
             ref="treeRef"
             :data="collections"
             :props="treeProps"
-            node-key="id"
+            node-key="treeKey"
             :expand-on-click-node="false"
             :default-expanded-keys="expandedKeys"
             draggable
@@ -138,40 +144,41 @@
           <!-- 请求基本信息 -->
           <div class="request-header">
             <div class="request-line">
-              <!-- HTTP接口显示方法选择器 -->
-              <el-select
-                v-model="requestMethod"
-                class="method-select"
-                :class="requestMethod.toLowerCase()"
-                :placeholder="'GET'"
-                :popper-class="'method-select-dropdown'"
-              >
+              <el-select v-model="selectedEnvironment" :placeholder="$t('apiTesting.interface.environment')" class="env-select">
+                <el-option :label="$t('apiTesting.common.noEnvironment')" :value="null" />
                 <el-option
-                  v-for="method in availableMethods"
-                  :key="method"
-                  :label="method"
-                  :value="method"
-                  :class="method.toLowerCase()"
+                  v-for="env in environments"
+                  :key="env.id"
+                  :label="env.name"
+                  :value="env.id"
                 />
               </el-select>
 
-              <el-input
-                v-model="requestUrl"
-                :placeholder="$t('apiTesting.interface.inputRequestUrl')"
-                class="url-input"
-              >
-                <template #prepend>
-                  <el-select v-model="selectedEnvironment" :placeholder="$t('apiTesting.interface.environment')" class="env-select">
-                    <el-option :label="$t('apiTesting.common.noEnvironment')" :value="null" />
-                    <el-option
-                      v-for="env in environments"
-                      :key="env.id"
-                      :label="env.name"
-                      :value="env.id"
-                    />
-                  </el-select>
-                </template>
-              </el-input>
+              <!-- 方法和 URL 使用同一组布局，保持两者紧邻并把剩余空间给 URL。 -->
+              <div class="request-target">
+                <!-- HTTP接口显示方法选择器 -->
+                <el-select
+                  v-model="requestMethod"
+                  class="method-select"
+                  :class="requestMethod.toLowerCase()"
+                  :placeholder="'GET'"
+                  :popper-class="'method-select-dropdown'"
+                >
+                  <el-option
+                    v-for="method in availableMethods"
+                    :key="method"
+                    :label="method"
+                    :value="method"
+                    :class="method.toLowerCase()"
+                  />
+                </el-select>
+
+                <el-input
+                  v-model="requestUrl"
+                  :placeholder="$t('apiTesting.interface.inputRequestUrl')"
+                  class="url-input"
+                />
+              </div>
 
               <!-- WebSocket连接按钮 -->
               <el-button
@@ -237,10 +244,18 @@
           <el-tabs v-model="activeTab" class="request-tabs">
             <el-tab-pane label="Params" name="params">
               <KeyValueEditor
-                v-model="selectedRequest.params"
+                v-model="queryParams"
                 :placeholder-key="$t('apiTesting.interface.paramName')"
                 :placeholder-value="$t('apiTesting.interface.paramValue')"
               />
+              <div v-if="pathParameterNames.length" class="path-parameters-panel">
+                <div class="path-parameters-title">Path Variables</div>
+                <KeyValueEditor
+                  v-model="pathParams"
+                  :placeholder-key="$t('apiTesting.interface.paramName')"
+                  :placeholder-value="$t('apiTesting.interface.paramValue')"
+                />
+              </div>
             </el-tab-pane>
 
             <el-tab-pane label="Headers" name="headers">
@@ -924,6 +939,88 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="showBatchImportDialog"
+      :title="$t('apiTesting.interface.importBatch.title')"
+      width="680px"
+      :close-on-click-modal="false"
+      destroy-on-close
+      @closed="resetBatchImport"
+    >
+      <template v-if="!importPreview">
+        <el-form label-width="76px">
+          <el-form-item :label="$t('apiTesting.interface.importBatch.format')">
+            <el-radio-group v-model="importFormat" size="small">
+              <el-radio-button value="openapi">{{ $t('apiTesting.interface.importBatch.openapi') }}</el-radio-button>
+              <el-radio-button value="postman">{{ $t('apiTesting.interface.importBatch.postman') }}</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item :label="$t('apiTesting.interface.importBatch.file')">
+            <el-upload
+              ref="batchImportUploadRef"
+              drag
+              :auto-upload="false"
+              :limit="1"
+              accept=".json,.yaml,.yml"
+              :on-change="onBatchImportFileChange"
+              :on-remove="onBatchImportFileRemove"
+            >
+              <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+              <div class="el-upload__text">{{ $t('apiTesting.interface.importBatch.dropFile') }}<em>{{ $t('apiTesting.interface.importBatch.clickUpload') }}</em></div>
+              <template #tip>
+                <div class="el-upload__tip">{{ $t('apiTesting.interface.importBatch.fileTip') }}</div>
+              </template>
+            </el-upload>
+          </el-form-item>
+          <el-form-item :label="$t('apiTesting.interface.importBatch.targetProject')">
+            <el-select v-model="importProjectId" :placeholder="$t('apiTesting.interface.importBatch.selectProject')" style="width: 100%">
+              <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </template>
+      <template v-else>
+        <div class="import-preview-summary">
+          <el-icon><InfoFilled /></el-icon>
+          <span>{{ $t('apiTesting.interface.importBatch.parsed', { count: importPreview.total }) }}</span>
+          <el-button link type="primary" @click="returnToImportFile">{{ $t('apiTesting.interface.importBatch.reselect') }}</el-button>
+        </div>
+        <div class="import-preview-list">
+          <section v-for="group in importPreview.groups" :key="group.name" class="import-preview-group">
+            <header>
+              <el-checkbox
+                :model-value="isImportGroupSelected(group)"
+                :indeterminate="isImportGroupIndeterminate(group)"
+                @change="toggleImportGroup(group, $event)"
+              >
+                {{ group.name }}
+              </el-checkbox>
+              <span class="import-group-count">{{ group.items.length }}</span>
+            </header>
+            <el-checkbox-group v-model="selectedImportIds">
+              <div v-for="item in group.items" :key="item.id" class="import-preview-item">
+                <el-checkbox :value="item.id" />
+                <el-tag size="small" type="warning" effect="plain">{{ item.method }}</el-tag>
+                <span class="import-item-name" :title="importItemName(item)">{{ importItemName(item) }}</span>
+                <span class="import-item-url" :title="importItemPath(item) || $t('apiTesting.interface.importBatch.urlMissing')">
+                  {{ importItemPath(item) || $t('apiTesting.interface.importBatch.urlMissing') }}
+                </span>
+              </div>
+            </el-checkbox-group>
+          </section>
+        </div>
+        <div class="import-selection-footer">
+          <el-checkbox :model-value="allImportSelected" @change="toggleAllImportItems">{{ $t('apiTesting.interface.importBatch.selectAll') }}</el-checkbox>
+          <span>{{ $t('apiTesting.interface.importBatch.selected', { selected: selectedImportIds.length, total: importPreview.total }) }}</span>
+        </div>
+      </template>
+      <template #footer>
+        <el-button @click="showBatchImportDialog = false">取消</el-button>
+        <el-button v-if="!importPreview" type="primary" :loading="importLoading" :disabled="!importFile || !importProjectId" @click="parseBatchImport">{{ $t('apiTesting.interface.importBatch.preview') }}</el-button>
+        <el-button v-else type="primary" :loading="importLoading" :disabled="!selectedImportIds.length" @click="submitBatchImport">{{ $t('apiTesting.interface.importBatch.importSelected') }}</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 代码生成对话框 -->
     <el-dialog
       v-model="showCodeGenerateDialog"
@@ -979,9 +1076,9 @@
 
 <script setup>
 import ResizableSplitPane from '@/components/ResizableSplitPane.vue'
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Folder, Document, MagicStick, Search, Close, CopyDocument, Delete } from '@element-plus/icons-vue'
+import { Plus, Folder, Document, MagicStick, Search, Close, CopyDocument, Delete, Upload, UploadFilled, InfoFilled } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 import KeyValueEditor from './components/KeyValueEditor.vue'
 import DataFactorySelector from '@/components/DataFactorySelector.vue'
@@ -1033,6 +1130,86 @@ const treeProps = {
   label: 'name'
 }
 
+// OpenAPI 路径参数使用单花括号，例如 /users/{id}；双花括号仍保留给环境变量。
+const getPathParameterNames = (url) => {
+  const names = []
+  const pattern = /(?<!\{)\{([^{}]+)\}(?!\})/g
+  let source = String(url || '')
+  try {
+    source = decodeURIComponent(source)
+  } catch {
+    // Keep the original URL when a partially encoded value cannot be decoded.
+  }
+  let match
+  while ((match = pattern.exec(source)) !== null) {
+    const name = match[1].trim()
+    if (name && !names.includes(name)) names.push(name)
+  }
+  return names
+}
+
+const syncPathParameterRows = (url, params) => {
+  if (!Array.isArray(params)) return
+  const names = getPathParameterNames(url)
+  const nameSet = new Set(names)
+  params.forEach(row => {
+    if (row.type === 'path' && !nameSet.has(row.key)) row.type = 'text'
+  })
+  names.forEach(key => {
+    const row = params.find(item => item.key === key)
+    if (row) {
+      row.type = 'path'
+    } else {
+      params.push({ key, value: '', description: '', enabled: true, type: 'path' })
+    }
+  })
+}
+
+const parameterRows = (params) => {
+  if (Array.isArray(params)) return params
+  if (!params || typeof params !== 'object') return []
+  return Object.entries(params).map(([key, value]) => ({
+    key,
+    value: value ?? '',
+    description: '',
+    enabled: true,
+    type: 'text'
+  }))
+}
+
+const pathParameterNames = computed(() => getPathParameterNames(selectedRequest.value?.url))
+const queryParams = computed({
+  get: () => {
+    const names = new Set(pathParameterNames.value)
+    return parameterRows(selectedRequest.value?.params).filter(row => row.type !== 'path' && !names.has(row.key))
+  },
+  set: (rows) => {
+    if (!selectedRequest.value) return
+    const names = new Set(pathParameterNames.value)
+    const pathRows = parameterRows(selectedRequest.value.params).filter(row => row.type === 'path' || names.has(row.key))
+    selectedRequest.value.params = [...rows, ...pathRows]
+  }
+})
+const pathParams = computed({
+  get: () => {
+    const names = pathParameterNames.value
+    const existing = parameterRows(selectedRequest.value?.params)
+    return names.map(name => existing.find(row => row.key === name) || {
+      key: name,
+      value: '',
+      description: '',
+      enabled: true,
+      type: 'path'
+    }).map(row => ({ ...row, type: 'path' }))
+  },
+  set: (rows) => {
+    if (!selectedRequest.value) return
+    const names = new Set(pathParameterNames.value)
+    const queryRows = parameterRows(selectedRequest.value.params).filter(row => row.type !== 'path' && !names.has(row.key))
+    selectedRequest.value.params = [...queryRows, ...rows.map(row => ({ ...row, type: 'path' }))]
+  }
+})
+
 // 数据工厂选择器相关
 const showDataFactorySelector = ref(false)
 const showVariableHelper = ref(false)
@@ -1048,6 +1225,121 @@ const loading = ref(false)
 // CURL导入相关
 const showCurlImportDialog = ref(false)
 const curlCommand = ref('')
+
+// Swagger / Postman 批量导入
+const showBatchImportDialog = ref(false)
+const batchImportUploadRef = ref(null)
+const importFormat = ref('openapi')
+const importFile = ref(null)
+const importProjectId = ref(null)
+const importPreview = ref(null)
+const selectedImportIds = ref([])
+const importLoading = ref(false)
+const allImportIds = computed(() => importPreview.value?.groups.flatMap(group => group.items.map(item => item.id)) || [])
+const allImportSelected = computed(() => allImportIds.value.length > 0 && selectedImportIds.value.length === allImportIds.value.length)
+const importItemPath = (item) => {
+  const path = item.path || item.url || ''
+  if (!path) return ''
+  try {
+    return new URL(path, window.location.origin).pathname.replace(/%7B/gi, '{').replace(/%7D/gi, '}')
+  } catch {
+    return path.split(/[?#]/, 1)[0]
+  }
+}
+const importItemName = (item) => item.name || `${item.method || ''} ${importItemPath(item)}`.trim()
+
+const openBatchImport = () => {
+  importProjectId.value = selectedProject.value
+  showBatchImportDialog.value = true
+}
+
+const onBatchImportFileChange = (file) => {
+  importFile.value = file.raw
+}
+
+const onBatchImportFileRemove = () => {
+  importFile.value = null
+}
+
+const resetBatchImport = () => {
+  importFile.value = null
+  importPreview.value = null
+  selectedImportIds.value = []
+  importLoading.value = false
+  batchImportUploadRef.value?.clearFiles()
+}
+
+const returnToImportFile = () => {
+  importPreview.value = null
+  selectedImportIds.value = []
+}
+
+const isImportGroupSelected = (group) => group.items.length > 0 && group.items.every(item => selectedImportIds.value.includes(item.id))
+const isImportGroupIndeterminate = (group) => {
+  const selected = group.items.filter(item => selectedImportIds.value.includes(item.id)).length
+  return selected > 0 && selected < group.items.length
+}
+
+const toggleImportGroup = (group, checked) => {
+  const ids = new Set(selectedImportIds.value)
+  group.items.forEach(item => checked ? ids.add(item.id) : ids.delete(item.id))
+  selectedImportIds.value = [...ids]
+}
+
+const toggleAllImportItems = (checked) => {
+  selectedImportIds.value = checked ? [...allImportIds.value] : []
+}
+
+const createImportFormData = (includeSelection = false) => {
+  const formData = new FormData()
+  formData.append('file', importFile.value)
+  formData.append('format', importFormat.value)
+  if (includeSelection) {
+    formData.append('project', importProjectId.value)
+    selectedImportIds.value.forEach(id => formData.append('selected_ids', id))
+  }
+  return formData
+}
+
+const postImportFile = (url, includeSelection = false) => api.request({
+  method: 'POST',
+  url,
+  data: createImportFormData(includeSelection),
+  headers: { 'Content-Type': 'multipart/form-data' },
+})
+
+const parseBatchImport = async () => {
+  if (!importFile.value || !importProjectId.value) return
+  importLoading.value = true
+  try {
+    const response = await postImportFile('/api-testing/requests/import-preview/')
+    importPreview.value = response.data
+    selectedImportIds.value = response.data.groups.flatMap(group => group.items.map(item => item.id))
+  } catch (error) {
+    const message = error.response?.status === 405
+      ? t('apiTesting.interface.importBatch.methodFailed')
+      : error.response?.data?.error || t('apiTesting.interface.importBatch.parseFailed')
+    ElMessage.error(message)
+  } finally {
+    importLoading.value = false
+  }
+}
+
+const submitBatchImport = async () => {
+  importLoading.value = true
+  try {
+    const response = await postImportFile('/api-testing/requests/import-batch/', true)
+    ElMessage.success(t('apiTesting.interface.importBatch.imported', { count: response.data.imported }))
+    showBatchImportDialog.value = false
+    if (Number(importProjectId.value) === Number(selectedProject.value)) {
+      await loadCollections(selectedProject.value)
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.error || t('apiTesting.interface.importBatch.importFailed'))
+  } finally {
+    importLoading.value = false
+  }
+}
 
 // 代码生成相关
 const showCodeGenerateDialog = ref(false)
@@ -1137,13 +1429,7 @@ const loadProjects = async () => {
 
 const loadCollections = async (projectId) => {
   try {
-    const response = await api.get('/api-testing/collections/', {
-      params: {
-        project: projectId
-      }
-    })
-    // 后端可能返回分页格式 { results: [...] } 或直接返回数组
-    const collectionsData = response.data.results || response.data || []
+    const collectionsData = await fetchAllPages('/api-testing/collections/', { project: projectId })
 
     // 构建树形结构
     collections.value = buildTree(collectionsData)
@@ -1176,39 +1462,92 @@ const loadEnvironments = async (projectId) => {
 }
 
 const buildTree = (items) => {
-  const map = {}
+  const map = new Map()
   const roots = []
 
   items.forEach(item => {
-    map[item.id] = {
+    map.set(String(item.id), {
       ...item,
       type: 'collection',
+      treeKey: `collection:${item.id}`,
       children: []
-    }
+    })
   })
 
   items.forEach(item => {
     if (item.parent) {
-      if (map[item.parent]) {
-        map[item.parent].children.push(map[item.id])
+      const parent = map.get(String(item.parent))
+      const collection = map.get(String(item.id))
+      if (parent && collection) {
+        parent.children.push(collection)
       }
     } else {
-      roots.push(map[item.id])
+      const collection = map.get(String(item.id))
+      if (collection) roots.push(collection)
     }
   })
 
   return roots
 }
 
+// 读取 DRF 分页接口的全部结果，避免大规模导入后树只显示第一页数据。
+const fetchAllPages = async (url, params = {}) => {
+  const results = []
+  let page = 1
+  while (true) {
+    const response = await api.get(url, { params: { ...params, page, page_size: 1500 } })
+    const data = response.data
+    if (Array.isArray(data)) return data
+    results.push(...(data.results || []))
+    if (!data.next) return results
+    page += 1
+  }
+}
+
 const findCollectionById = (collections, id) => {
-  for (const collection of collections) {
-    if (collection.id === id) return collection
-    if (collection.children) {
-      const found = findCollectionById(collection.children, id)
-      if (found) return found
-    }
+  for (const item of collections) {
+    // 请求节点也有 id，只允许集合节点参与父集合匹配。
+    if (item.type !== 'collection') continue
+    if (String(item.id) === String(id)) return item
+    const found = findCollectionById(item.children || [], id)
+    if (found) return found
   }
   return null
+}
+
+// 保存接口后只同步当前树节点，避免重新请求并重建整棵接口树。
+const updateRequestTreeNode = (requestData) => {
+  if (!requestData?.id) return
+  const treeRequest = {
+    ...requestData,
+    type: 'request',
+    treeKey: `request:${requestData.id}`,
+    name: requestData.name
+  }
+  delete treeRequest.children
+
+  const replaceIn = (nodes) => {
+    for (const node of nodes) {
+      if (node.type === 'request' && String(node.id) === String(requestData.id)) {
+        Object.assign(node, treeRequest)
+        return true
+      }
+      if (node.children && replaceIn(node.children)) return true
+    }
+    return false
+  }
+
+  if (!replaceIn(collections.value)) {
+    const collection = requestData.collection
+      ? findCollectionById(collections.value, requestData.collection)
+      : null
+    if (collection) {
+      collection.children = collection.children || []
+      collection.children.push(treeRequest)
+    } else if (!requestData.collection) {
+      collections.value.push(treeRequest)
+    }
+  }
 }
 
 const clearCollectionChildren = (collection) => {
@@ -1222,8 +1561,7 @@ const loadRequests = async () => {
   if (!selectedProject.value) return
 
   try {
-    const response = await api.get('/api-testing/requests/')
-    const requests = response.data.results || response.data || []
+    const requests = await fetchAllPages('/api-testing/requests/', { project: selectedProject.value })
 
     // 清空所有集合的子节点（请求）
     collections.value.forEach(collection => {
@@ -1240,19 +1578,26 @@ const loadRequests = async () => {
         const collection = findCollectionById(collections.value, request.collection)
         if (collection) {
           if (!collection.children) collection.children = []
-          collection.children.push({
+          const treeRequest = {
             ...request,
             type: 'request',
+            treeKey: `request:${request.id}`,
             name: request.name
-          })
+          }
+          // 接口必须是叶节点，避免历史树状态中的 children 造成接口嵌套。
+          delete treeRequest.children
+          collection.children.push(treeRequest)
         }
       } else {
         // 未关联集合的请求，直接添加到集合列表的根级别
-        collections.value.push({
+        const treeRequest = {
           ...request,
           type: 'request',
+          treeKey: `request:${request.id}`,
           name: request.name
-        })
+        }
+        delete treeRequest.children
+        collections.value.push(treeRequest)
       }
     })
   } catch (error) {
@@ -1299,6 +1644,8 @@ const onNodeClick = async (data) => {
         })
         requestData.params = paramsArray
       }
+
+      syncPathParameterRows(requestData.url, requestData.params)
 
       // 将 headers 从字典格式转换为数组格式
       if (requestData.headers && typeof requestData.headers === 'object' && !Array.isArray(requestData.headers)) {
@@ -1362,11 +1709,11 @@ const onNodeRightClick = (event, node, treeNode) => {
 }
 
 const onNodeExpand = (node) => {
-  expandedKeys.value.push(node.id)
+  expandedKeys.value.push(node.treeKey)
 }
 
 const onNodeCollapse = (node) => {
-  expandedKeys.value = expandedKeys.value.filter(key => key !== node.id)
+  expandedKeys.value = expandedKeys.value.filter(key => key !== node.treeKey)
 }
 
 const createEmptyRequest = () => {
@@ -1666,6 +2013,15 @@ const requestUrl = computed({
   }
 })
 
+watch(() => selectedRequest.value?.url, (url) => {
+  if (selectedRequest.value) {
+    if (!Array.isArray(selectedRequest.value.params)) {
+      selectedRequest.value.params = parameterRows(selectedRequest.value.params)
+    }
+    syncPathParameterRows(url, selectedRequest.value.params)
+  }
+})
+
 const hasBody = computed(() => {
   return selectedRequest.value && selectedRequest.value.method && ['POST', 'PUT', 'PATCH'].includes(selectedRequest.value.method)
 })
@@ -1916,7 +2272,7 @@ const saveRequest = async () => {
     }
 
     selectedRequest.value = response.data
-    await loadCollections(selectedProject.value)
+    updateRequestTreeNode(response.data)
     ElMessage.success('保存成功')
   } catch (error) {
     ElMessage.error('保存失败')
@@ -2819,8 +3175,20 @@ const useLocalVariableCategories = () => {
 }
 
 .header-actions .el-input {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 150px;
+  min-width: 120px;
+}
+
+.interface-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.interface-header-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 .header-actions .el-button {
@@ -2831,6 +3199,112 @@ const useLocalVariableCategories = () => {
 .header-actions .el-button:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.import-preview-summary,
+.import-selection-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: #606266;
+  background: #f5f7fa;
+}
+
+.import-preview-summary .el-button {
+  margin-left: auto;
+}
+
+.import-preview-list {
+  max-height: min(55vh, 520px);
+  overflow-y: auto;
+  margin-top: 12px;
+}
+
+.import-preview-group {
+  margin-bottom: 10px;
+  border: 1px solid #ebeef5;
+}
+
+.import-preview-group > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f5f7fa;
+}
+
+.import-group-count,
+.import-selection-footer > span {
+  color: #909399;
+  font-size: 12px;
+}
+
+.import-preview-group :deep(.el-checkbox-group) {
+  display: block;
+}
+
+.import-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px 7px 30px;
+  border-top: 1px solid #f2f3f5;
+  font-size: 14px;
+  line-height: normal;
+}
+
+.import-item-name,
+.import-item-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-item-name {
+  flex: 0 1 180px;
+  color: #409eff;
+}
+
+.import-item-url {
+  flex: 1;
+  color: #909399;
+  font-size: 12px;
+}
+
+.import-selection-footer {
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.path-parameters-panel {
+  margin-top: 16px;
+  border-top: 1px solid #ebeef5;
+  padding-top: 12px;
+}
+
+.path-parameters-title {
+  margin-bottom: 8px;
+  color: #606266;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .import-preview-item {
+    flex-wrap: wrap;
+  }
+
+  .import-item-name {
+    flex: 1;
+    min-width: 120px;
+  }
+
+  .import-item-url {
+    flex-basis: calc(100% - 26px);
+    margin-left: 26px;
+  }
 }
 
 .collection-tree {
@@ -3080,9 +3554,18 @@ const useLocalVariableCategories = () => {
   flex-wrap: wrap;
 }
 
+/* 环境选择器独立占用较小宽度，方法和 URL 组成连续的请求目标区域。 */
+.request-target {
+  display: flex;
+  flex: 1;
+  min-width: 260px;
+  align-items: stretch;
+}
+
 /* 方法选择器样式 */
 .method-select {
-  width: 120px;
+  width: 104px;
+  flex: 0 0 104px;
 }
 
 .method-select :deep(.el-select) {
@@ -3258,15 +3741,21 @@ const useLocalVariableCategories = () => {
 
 .url-input {
   flex: 1;
-  min-width: 200px;
+  min-width: 0;
 }
 
-.url-input .el-input {
-  border-radius: 6px;
+.request-target .method-select :deep(.el-input__wrapper) {
+  border-radius: 6px 0 0 6px;
+}
+
+.request-target .url-input :deep(.el-input__wrapper) {
+  margin-left: -1px;
+  border-radius: 0 6px 6px 0;
 }
 
 .env-select {
-  width: 160px;
+  width: 128px;
+  flex: 0 0 128px;
 }
 
 .env-select .el-select {
@@ -4290,6 +4779,11 @@ const useLocalVariableCategories = () => {
     width: 100%;
   }
 
+  .request-target {
+    width: 100%;
+    min-width: 0;
+  }
+
   .form-row {
     flex-direction: column;
     align-items: stretch;
@@ -4469,6 +4963,75 @@ const useLocalVariableCategories = () => {
   border-color: #e67e22 !important;
 }
 
+/* 方法选择器保持原尺寸和下拉样式，选中方法文字与接口树标签使用同色。 */
+.method-select :deep(.el-input__wrapper) {
+  background-color: #ffffff !important;
+  border-color: #dcdfe6 !important;
+}
+
+.method-select.get :deep(.el-input__inner),
+.method-select.get :deep(.el-select__selected-item),
+.method-select.get :deep(.el-select__selected-item span),
+.method-select.get :deep(.el-select__icon) {
+  color: #61affe !important;
+}
+
+.method-select.post :deep(.el-input__inner),
+.method-select.post :deep(.el-select__selected-item),
+.method-select.post :deep(.el-select__selected-item span),
+.method-select.post :deep(.el-select__icon) {
+  color: #49cc90 !important;
+}
+
+.method-select.put :deep(.el-input__inner),
+.method-select.put :deep(.el-select__selected-item),
+.method-select.put :deep(.el-select__selected-item span),
+.method-select.put :deep(.el-select__icon) {
+  color: #fca130 !important;
+}
+
+.method-select.delete :deep(.el-input__inner),
+.method-select.delete :deep(.el-select__selected-item),
+.method-select.delete :deep(.el-select__selected-item span),
+.method-select.delete :deep(.el-select__icon) {
+  color: #f93e3e !important;
+}
+
+.method-select.patch :deep(.el-input__inner),
+.method-select.patch :deep(.el-select__selected-item),
+.method-select.patch :deep(.el-select__selected-item span),
+.method-select.patch :deep(.el-select__icon) {
+  color: #50e3c2 !important;
+}
+
+.method-select.head :deep(.el-input__inner),
+.method-select.head :deep(.el-select__selected-item),
+.method-select.head :deep(.el-select__selected-item span),
+.method-select.head :deep(.el-select__icon) {
+  color: #9013fe !important;
+}
+
+.method-select.options :deep(.el-input__inner),
+.method-select.options :deep(.el-select__selected-item),
+.method-select.options :deep(.el-select__selected-item span),
+.method-select.options :deep(.el-select__icon) {
+  color: #0ebeff !important;
+}
+
+.method-select.connect :deep(.el-input__inner),
+.method-select.connect :deep(.el-select__selected-item),
+.method-select.connect :deep(.el-select__selected-item span),
+.method-select.connect :deep(.el-select__icon) {
+  color: #7f8c8d !important;
+}
+
+.method-select.trace :deep(.el-input__inner),
+.method-select.trace :deep(.el-select__selected-item),
+.method-select.trace :deep(.el-select__selected-item span),
+.method-select.trace :deep(.el-select__icon) {
+  color: #e67e22 !important;
+}
+
 /* 覆盖方法选择器通用样式 */
 .method-select :deep(.el-select .el-input__inner) {
   color: white !important;
@@ -4484,5 +5047,43 @@ const useLocalVariableCategories = () => {
   background-color: transparent !important;
   color: white !important;
 }
+
+/* 提高选择器优先级，覆盖上面的通用白色文字规则。 */
+.method-select.get :deep(.el-select .el-input__inner),
+.method-select.get :deep(.el-select .el-select__icon),
+.method-select.get :deep(.el-select .el-select__selected-item),
+.method-select.get :deep(.el-select .el-select__selected-item span) { color: #61affe !important; }
+.method-select.post :deep(.el-select .el-input__inner),
+.method-select.post :deep(.el-select .el-select__icon),
+.method-select.post :deep(.el-select .el-select__selected-item),
+.method-select.post :deep(.el-select .el-select__selected-item span) { color: #49cc90 !important; }
+.method-select.put :deep(.el-select .el-input__inner),
+.method-select.put :deep(.el-select .el-select__icon),
+.method-select.put :deep(.el-select .el-select__selected-item),
+.method-select.put :deep(.el-select .el-select__selected-item span) { color: #fca130 !important; }
+.method-select.delete :deep(.el-select .el-input__inner),
+.method-select.delete :deep(.el-select .el-select__icon),
+.method-select.delete :deep(.el-select .el-select__selected-item),
+.method-select.delete :deep(.el-select .el-select__selected-item span) { color: #f93e3e !important; }
+.method-select.patch :deep(.el-select .el-input__inner),
+.method-select.patch :deep(.el-select .el-select__icon),
+.method-select.patch :deep(.el-select .el-select__selected-item),
+.method-select.patch :deep(.el-select .el-select__selected-item span) { color: #50e3c2 !important; }
+.method-select.head :deep(.el-select .el-input__inner),
+.method-select.head :deep(.el-select .el-select__icon),
+.method-select.head :deep(.el-select .el-select__selected-item),
+.method-select.head :deep(.el-select .el-select__selected-item span) { color: #9013fe !important; }
+.method-select.options :deep(.el-select .el-input__inner),
+.method-select.options :deep(.el-select .el-select__icon),
+.method-select.options :deep(.el-select .el-select__selected-item),
+.method-select.options :deep(.el-select .el-select__selected-item span) { color: #0ebeff !important; }
+.method-select.connect :deep(.el-select .el-input__inner),
+.method-select.connect :deep(.el-select .el-select__icon),
+.method-select.connect :deep(.el-select .el-select__selected-item),
+.method-select.connect :deep(.el-select .el-select__selected-item span) { color: #7f8c8d !important; }
+.method-select.trace :deep(.el-select .el-input__inner),
+.method-select.trace :deep(.el-select .el-select__icon),
+.method-select.trace :deep(.el-select .el-select__selected-item),
+.method-select.trace :deep(.el-select .el-select__selected-item span) { color: #e67e22 !important; }
 
 </style>

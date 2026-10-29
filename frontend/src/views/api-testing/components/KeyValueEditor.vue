@@ -524,7 +524,10 @@ defineExpose({
 }
 
 .header {
-  display: flex;
+  /* 表头和数据行使用同一套网格，避免列标题与输入框错位。 */
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(280px, 1.55fr) minmax(160px, 1fr) auto;
+  column-gap: 12px;
   background: #f5f7fa;
   border-bottom: 1px solid #e4e7ed;
   padding: 8px;
@@ -539,7 +542,9 @@ defineExpose({
 }
 
 .row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(280px, 1.55fr) minmax(160px, 1fr) auto;
+  column-gap: 12px;
   border-bottom: 1px solid #f5f7fa;
   padding: 8px;
   min-height: 40px;
@@ -557,29 +562,44 @@ defineExpose({
 .column {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
+  /* min-width: 0; */
 }
 
 .key-column {
-  width: 25%;
-  min-width: 150px;
-}
-
-.value-column {
-  width: 25%;
-  min-width: 200px;
-}
-
-.description-column {
-  width: 30%;
-  min-width: 120px;
+  min-width: 0;
 }
 
 .action-column {
-  width: 20%;
-  min-width: 100px;
+  min-width: 40px;
   justify-content: flex-end;
-  gap: 135px;
+  gap: 8px;
+}
+
+/* 两个变量辅助按钮属于同一组操作，保持紧邻显示。 */
+.value-column {
+  gap: 0;
+}
+
+.value-column .variable-helper-btn {
+  margin-left: 0 !important;
+}
+
+/* 输入框填满各自列，操作按钮只占用必要宽度，释放尾部空白。 */
+.key-column :deep(.el-input),
+.value-column > :deep(.el-input),
+.description-column :deep(.el-input) {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+.value-column > :deep(.el-upload) {
+  flex: 1;
+}
+
+.value-column > :deep(.el-upload .el-button) {
+  width: 100%;
 }
 
 .data-factory-btn {

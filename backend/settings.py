@@ -179,6 +179,10 @@ STATIC_FILES_ROOT = os.path.join(BASE_DIR, 'static_files')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# Swagger/Postman 批量导入会为每个选中的接口提交一个 selected_ids 字段。
+# 1500 个接口再加上文件、项目等 multipart 字段，需要高于 1500 的解析上限。
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Custom User Model

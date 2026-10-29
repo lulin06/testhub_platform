@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.db import models
+from django.db import transaction
 from django.utils import timezone
 from django.http import HttpResponse, FileResponse, Http404, HttpResponseNotFound
 from django.views.static import serve
@@ -44,6 +45,8 @@ from .utils import execute_assertions
 from .operation_logger import log_operation
 from apps.projects.services import ensure_workspace_project_for_module, soft_delete_module_project, sync_project_members_from_module, sync_workspace_project_from_module
 from .variable_resolver import VariableResolver
+from .importers import parse_collection
+from .path_params import resolve_path_parameters
 from .serializers import (
     ApiProjectSerializer, ApiCollectionSerializer, ApiRequestSerializer,
     EnvironmentSerializer, RequestHistorySerializer, TestSuiteSerializer,
@@ -60,7 +63,7 @@ from rest_framework.pagination import PageNumberPagination
 class StandardPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = 'page_size'
-    max_page_size = 1000
+    max_page_size = 1500
 
 
 class ApiProjectViewSet(viewsets.ModelViewSet):
@@ -237,6 +240,7 @@ class ApiCollectionViewSet(viewsets.ModelViewSet):
     queryset = ApiCollection.objects.all()
     serializer_class = ApiCollectionSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['project', 'parent']
     
@@ -281,14 +285,18 @@ class ApiCollectionViewSet(viewsets.ModelViewSet):
         )
         instance.delete()
 
-
 class ApiRequestViewSet(viewsets.ModelViewSet):
     queryset = ApiRequest.objects.all()
     serializer_class = ApiRequestSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['collection', 'method', 'request_type']
     search_fields = ['name', 'url']
+
+    def http_method_not_allowed(self, request, *args, **kwargs):
+        logger.warning('API请求接口收到不支持的HTTP方法 %s: %s', request.method, request.path)
+        return super().http_method_not_allowed(request, *args, **kwargs)
     
     def get_queryset(self):
         user = self.request.user
@@ -353,6 +361,80 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
             user=self.request.user
         )
         instance.delete()
+
+    def _parse_import_file(self, request):
+        """Read a bounded upload and convert it to normalized interface records."""
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            raise ValueError('请选择要导入的文件')
+        if uploaded.size > 10 * 1024 * 1024:
+            raise ValueError('文件不能超过 10 MB')
+        return parse_collection(uploaded.read(), uploaded.name)
+
+    @action(detail=False, methods=['post'], url_path='import-preview')
+    def import_preview(self, request):
+        """Parse an OpenAPI or Postman file and return selectable grouped interfaces."""
+        try:
+            items = self._parse_import_file(request)
+        except ValueError as exc:
+            logger.warning('API接口导入预览解析失败: %s', exc)
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        groups = {}
+        for index, item in enumerate(items):
+            group_name = item.pop('group')
+            item['id'] = str(index)
+            groups.setdefault(group_name, []).append(item)
+        return Response({
+            'total': len(items),
+            'groups': [{'name': name, 'items': group_items} for name, group_items in groups.items()],
+        })
+
+    @action(detail=False, methods=['post'], url_path='import-batch')
+    def import_batch(self, request):
+        """Create selected imported interfaces under their source groups."""
+        try:
+            items = self._parse_import_file(request)
+        except ValueError as exc:
+            logger.warning('API接口批量导入解析失败: %s', exc)
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            project_id = int(request.data.get('project'))
+            selected_ids = {int(value) for value in request.data.getlist('selected_ids')}
+        except (TypeError, ValueError):
+            return Response({'error': '项目或接口选择无效'}, status=status.HTTP_400_BAD_REQUEST)
+        project = ApiProject.objects.filter(
+            models.Q(owner=request.user) | models.Q(members=request.user),
+            id=project_id,
+        ).distinct().first()
+        if not project:
+            return Response({'error': '无权访问目标项目'}, status=status.HTTP_403_FORBIDDEN)
+        selected = [(index, item) for index, item in enumerate(items) if index in selected_ids]
+        if not selected:
+            return Response({'error': '请至少选择一个接口'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                collection_by_name = {}
+                created = 0
+                for index, item in selected:
+                    group = item['group']
+                    collection = collection_by_name.get(group)
+                    if collection is None:
+                        collection = ApiCollection.objects.create(
+                            project=project, name=group, description='由接口定义文件导入',
+                        )
+                        collection_by_name[group] = collection
+                    ApiRequest.objects.create(
+                        collection=collection,
+                        name=item['name'][:200], description=item.get('description', ''),
+                        method=item['method'], url=item['url'], headers=item['headers'],
+                        params=item['params'], body=item['body'], created_by=request.user,
+                        order=index,
+                    )
+                    created += 1
+        except Exception:
+            logger.exception('批量导入 API 接口失败')
+            return Response({'error': '接口导入失败'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'imported': created, 'groups': len(collection_by_name)}, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['post'])
     def execute(self, request, pk=None):
@@ -401,6 +483,7 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
             for key, value in params.items():
                 params[key] = self._replace_variables(str(value), variables)
                 params[key] = resolver.resolve(params[key])
+            url, params = resolve_path_parameters(url, params)
 
             # 准备请求体
             body_data = None
@@ -749,6 +832,7 @@ class TestSuiteViewSet(viewsets.ModelViewSet):
                     for key, value in params.items():
                         params[key] = self._replace_variables(str(value), variables)
                         params[key] = resolver.resolve(params[key])
+                    url, params = resolve_path_parameters(url, params)
 
                     body_data = None
                     if api_request.body and api_request.method in ['POST', 'PUT', 'PATCH']:

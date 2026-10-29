@@ -2,7 +2,7 @@
   <div class="environment-management">
     <div class="header">
       <h3>{{ $t('apiTesting.environment.title') }}</h3>
-      <el-button type="primary" @click="showCreateDialog = true">
+      <el-button type="primary" @click="openCreateDialog">
         <el-icon><Plus /></el-icon>
         {{ $t('apiTesting.environment.createEnvironment') }}
       </el-button>
@@ -210,7 +210,7 @@ const form = reactive({
   project: null,
   variables: [
     {
-      key: '',
+      key: 'baseUrl',
       initialValue: '',
       currentValue: ''
     }
@@ -306,6 +306,17 @@ const onScopeChange = () => {
   if (form.scope === 'GLOBAL') {
     form.project = null
   }
+}
+
+const openCreateDialog = () => {
+  editingEnvironment.value = null
+  Object.assign(form, {
+    name: '',
+    scope: 'GLOBAL',
+    project: null,
+    variables: [{ key: 'baseUrl', initialValue: '', currentValue: '' }]
+  })
+  showCreateDialog.value = true
 }
 
 const addVariable = () => {
@@ -480,7 +491,7 @@ const resetForm = () => {
     project: null,
     variables: [
       {
-        key: '',
+        key: 'baseUrl',
         initialValue: '',
         currentValue: ''
       }

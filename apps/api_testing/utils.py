@@ -3,6 +3,7 @@ import time
 from django.utils import timezone
 from .models import RequestHistory
 from .variable_resolver import VariableResolver
+from .path_params import resolve_path_parameters
 
 
 def execute_assertions(response, assertions):
@@ -167,6 +168,7 @@ def execute_test_suite(test_suite, environment, executed_by):
                 for key, value in params.items():
                     params[key] = _replace_variables(str(value), variables)
                     params[key] = resolver.resolve(params[key])
+                url, params = resolve_path_parameters(url, params)
                 
                 # 准备请求体
                 body_data = None
@@ -328,6 +330,7 @@ def execute_api_request(api_request, environment, executed_by):
         for key, value in params.items():
             params[key] = _replace_variables(str(value), variables)
             params[key] = resolver.resolve(params[key])
+        url, params = resolve_path_parameters(url, params)
         
         # 准备请求体
         body_data = None
