@@ -258,7 +258,6 @@ class PlaywrightTestEngine:
         import tempfile
         from pathlib import Path
         from asgiref.sync import sync_to_async
-        from django.core.files.base import ContentFile
         from .models import StorageState
 
         operation = params.get('operation')
@@ -280,12 +279,7 @@ class PlaywrightTestEngine:
             state.name = name or state.name
             state.source_url = self.page.url
             state.browser = self.browser_type
-            def persist_state():
-                state.file.save(f'{state.name}.json', ContentFile(raw), save=False)
-                state.file_size = len(raw)
-                state.save()
-                return state.id
-            await sync_to_async(persist_state)()
+            await sync_to_async(state.write_content)(raw)
             return f'登录态已保存：{state.name}'
         # 切换或清除必须重建 BrowserContext，确保旧 Cookie 和 localStorage 不会残留。
         if operation in {'switch', 'clear'}:

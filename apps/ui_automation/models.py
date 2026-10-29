@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.core.files.base import ContentFile
 import json
 import uuid
 from apps.projects.models import Project
@@ -77,6 +78,21 @@ class StorageState(models.Model):
 
     def __str__(self):
         return self.name
+
+    def write_content(self, content):
+        """更新登录态内容时保留已有文件路径，避免覆盖动作不断生成新文件。"""
+        if self.pk and self.file and self.file.name:
+            storage = self.file.storage
+            if storage.exists(self.file.name):
+                with storage.open(self.file.name, 'wb') as stored_file:
+                    stored_file.write(content)
+            else:
+                # 文件或项目目录缺失时按数据库记录的原路径恢复，避免覆盖操作因目录不存在而失败。
+                self.file.name = storage.save(self.file.name, ContentFile(content))
+        else:
+            self.file.save('storage_state.json', ContentFile(content), save=False)
+        self.file_size = len(content)
+        self.save()
 
 
 class LocatorStrategy(models.Model):
@@ -195,11 +211,6 @@ class Element(models.Model):
 
     def __str__(self):
         return f'{self.page}: {self.name}' if self.page else self.name
-
-    def increment_usage_count(self):
-        """增加使用次数"""
-        self.usage_count = models.F('usage_count') + 1
-        self.save(update_fields=['usage_count'])
 
     def get_all_locators(self):
         """获取所有定位器（主要+备用）"""

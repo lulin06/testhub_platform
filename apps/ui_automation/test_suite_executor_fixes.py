@@ -20,6 +20,34 @@ class TestSuiteExecutorFixes(SimpleTestCase):
         )
         page.wait_for_load_state.assert_called_once_with('networkidle', timeout=5000)
 
+    def test_url_assertion_waits_for_redirect(self):
+        executor = object.__new__(TestExecutor)
+        page = Mock()
+        page.url = 'https://example.test/login'
+
+        def wait_for_timeout(_):
+            page.url = 'https://example.test/autotestshop'
+
+        page.wait_for_timeout.side_effect = wait_for_timeout
+        executor.current_page = page
+        executor.variables = UiVariableContext()
+        step = {
+            'step_number': 1,
+            'action_type': 'assert',
+            'description': '等待登录跳转',
+            'assert_type': 'urlContains',
+            'assert_value': 'autotestshop',
+            'wait_time': 1000,
+            'input_value': '',
+            'element': None,
+            'action_params': {},
+        }
+
+        result = executor._execute_step_playwright(step)
+
+        self.assertTrue(result['success'], result.get('error'))
+        page.wait_for_timeout.assert_called_once_with(100)
+
     def test_click_skips_a_disabled_save_button_when_requested(self):
         executor = object.__new__(TestExecutor)
         executor.variables = UiVariableContext()

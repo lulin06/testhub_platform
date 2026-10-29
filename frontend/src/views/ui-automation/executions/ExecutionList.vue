@@ -105,7 +105,7 @@
             {{ formatDuration(row.execution_time) }}
           </template>
         </el-table-column>
-        <el-table-column :label="$t('uiAutomation.common.operation')" width="150" fixed="right" align="center">
+        <el-table-column :label="$t('uiAutomation.common.operation')" width="180" fixed="right" align="center" class-name="action-col">
           <template #default="{ row }">
             <el-button size="small" type="primary" link @click="viewExecutionDetail(row)">
               <el-icon><View /></el-icon>
@@ -122,6 +122,7 @@
               {{ $t('uiAutomation.common.rerun') }}
             </el-button>
             <el-button
+              size="small"
               link
               type="danger"
               @click="handleDelete(row)"
@@ -661,6 +662,11 @@ onMounted(async () => {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* 固定操作列宽度并禁止按钮换行，确保三项操作保持在同一行。 */
+:deep(.action-col .cell) {
+  white-space: nowrap;
 }
 
 .execution-detail {

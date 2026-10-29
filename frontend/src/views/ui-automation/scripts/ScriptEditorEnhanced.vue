@@ -157,6 +157,12 @@
                   <el-descriptions-item :label="$t('uiAutomation.scriptEditor.locatorExpression')">
                     <code>{{ selectedElementDetail.locator_value }}</code>
                   </el-descriptions-item>
+                  <el-descriptions-item :label="$t('uiAutomation.element.locatorOptions')">
+                    <code>{{ JSON.stringify(selectedElementDetail.locator_options || {}) }}</code>
+                  </el-descriptions-item>
+                  <el-descriptions-item :label="$t('uiAutomation.common.description')">
+                    {{ selectedElementDetail.description || '-' }}
+                  </el-descriptions-item>
                   <el-descriptions-item :label="$t('uiAutomation.scriptEditor.usageCount')">
                     {{ selectedElementDetail.usage_count || 0 }}
                   </el-descriptions-item>

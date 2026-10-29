@@ -10,13 +10,27 @@
           <header class="step-header">
             <el-icon class="drag-handle"><Rank /></el-icon>
             <span class="step-number">{{ index + 1 }}</span>
-            <el-select v-model="element.action_type" size="small" @change="onActionChange(element)">
+            <el-select v-model="element.action_type" class="action-selector" size="small" fit-input-width @change="onActionChange(element)">
               <el-option v-for="action in actions" :key="action.value" :label="action.label" :value="action.value" />
             </el-select>
-            <el-select v-if="needsElement(element) && pages.length" v-model="element.element_page" size="small" clearable placeholder="所属页面" @change="onPageChange(element)">
+            <el-select v-if="needsElement(element) && pages.length" v-model="element.element_page" class="page-selector" size="small" clearable placeholder="所属页面" @change="onPageChange(element)">
               <el-option v-for="page in pages" :key="page.id" :label="page.name" :value="page.name" />
             </el-select>
-            <el-select v-if="needsElement(element)" v-model="element.element_id" size="small" filterable clearable placeholder="选择元素" @change="onElementChange(element)">
+            <el-select
+              v-if="needsElement(element)"
+              v-model="element.element_id"
+              class="element-selector"
+              size="small"
+              filterable
+              :remote="!elementsReady"
+              popper-class="element-selector-popper"
+              clearable
+              :loading="elementsLoading"
+              placeholder="选择元素"
+              :remote-method="keyword => emit('search-elements', { step: element, keyword })"
+              @visible-change="visible => visible && emit('open-element-selector', element)"
+              @change="onElementChange(element)"
+            >
               <el-option v-for="item in getElementsForStep(element)" :key="item.id" :label="elementOptionLabel(item)" :value="item.id" />
             </el-select>
             <el-button text @click="element.expanded = !element.expanded; emitSteps()" :aria-label="element.expanded ? '折叠步骤' : '展开步骤'">
@@ -66,7 +80,7 @@
           <div v-if="['wait', 'waitFor'].includes(element.action_type)" class="step-field">
             <el-input-number v-model="element.wait_time" :min="100" :max="30000" :step="100" size="small" @change="emitSteps" />
           </div>
-          <div v-if="element.action_type === 'assert'" class="step-field">
+          <div v-if="element.action_type === 'assert'" class="step-field" :class="{ 'url-contains-field': element.assert_type === 'urlContains' }">
             <el-select v-model="element.assert_type" size="small" @change="emitSteps">
               <el-option label="文本包含" value="textContains" /><el-option label="文本相等" value="textEquals" />
               <el-option label="元素可见" value="isVisible" /><el-option label="元素存在" value="exists" />
@@ -98,11 +112,13 @@ const props = defineProps({
   elements: { type: Array, default: () => [] },
   pages: { type: Array, default: () => [] },
   storageStates: { type: Array, default: () => [] },
+  elementsLoading: { type: Boolean, default: false },
+  elementsReady: { type: Boolean, default: false },
   title: { type: String, default: '结构化步骤' },
   helperActions: { type: Boolean, default: false },
   showToolbar: { type: Boolean, default: true }
 })
-const emit = defineEmits(['update:modelValue', 'change', 'helper', 'variable'])
+const emit = defineEmits(['update:modelValue', 'change', 'helper', 'variable', 'search-elements', 'open-element-selector'])
 // 与后端 LocatorStrategy 名称保持一致，保证步骤编辑和代码生成使用同一套值。
 const strategies = ['role', 'label', 'placeholder', 'text', 'test-id', 'title', 'alt-text', 'css', 'xpath']
 const actions = [
@@ -205,13 +221,49 @@ const onElementChange = step => {
 .step-row { border: 1px solid var(--el-border-color); border-radius: 4px; padding: 9px; margin-bottom: 8px; display: grid; gap: 8px; }
 .step-row.expanded { border-color: var(--el-color-primary-light-5); }
 .step-header { min-width: 0; }
-.step-header > .el-select { min-width: 105px; }
-.step-header > .el-select:nth-of-type(2) { min-width: 150px; }
+.step-header > .el-select { min-width: 0; }
+.step-header > .action-selector {
+  flex: 0 1 112px;
+  width: 112px;
+  min-width: 100px;
+  max-width: 120px;
+}
+.step-header > .page-selector {
+  flex: 0 1 142px;
+  width: 142px;
+  min-width: 120px;
+  max-width: 180px;
+}
+/* 元素名称和定位器可能很长，限制选择器本身及其弹层宽度。 */
+.step-header > .element-selector {
+  flex: 1 1 380px;
+  width: 380px;
+  min-width: 220px;
+  max-width: min(480px, 42vw);
+}
+.element-selector :deep(.el-select__selected-item),
+.element-selector :deep(.el-select__selected-item span) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:deep(.element-selector-popper) {
+  width: min(700px, calc(100vw - 32px)) !important;
+  max-width: 700px !important;
+}
+:deep(.element-selector-popper .el-select-dropdown__item) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .step-content { display: grid; gap: 8px; min-width: 0; }
 .storage-state-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .step-field > .el-input { flex: 1; min-width: 0; }
 .variable-set-field > .el-input { flex: 1 1 0; min-width: 0; }
 .variable-set-field :deep(.el-input__inner) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* URL 包含断言的下拉框和输入框平分按钮之外的可用宽度。 */
+.url-contains-field > .el-select, .url-contains-field > .el-input { flex: 1 1 0; width: 0; min-width: 0; }
 .step-field :deep(.data-factory-button) { background-color: #409eff !important; border-color: #409eff !important; color: white !important; }
 .step-field :deep(.data-factory-button:hover) { background-color: #66b1ff !important; border-color: #66b1ff !important; }
 .step-field > .variable-helper-button { flex: 0 0 auto; background-color: #67c23a; border-color: #67c23a; color: white; }
@@ -223,6 +275,12 @@ const onElementChange = step => {
 @media (max-width: 760px) {
   .step-header { flex-wrap: wrap; }
   .step-header > .el-select { flex: 1 1 140px; }
+  .step-header > .action-selector,
+  .step-header > .page-selector,
+  .step-header > .element-selector {
+    width: auto;
+    max-width: none;
+  }
   .locator-field { flex-wrap: wrap; }
   .locator-field > .el-select, .locator-field > .el-input { flex: 1 1 0; width: 0; }
 }

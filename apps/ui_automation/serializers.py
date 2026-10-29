@@ -17,6 +17,77 @@ import json
 User = get_user_model()
 
 
+def _element_case_step_count(obj):
+    """返回正式 UI 用例中引用该元素的步骤条数。"""
+    if hasattr(obj, 'case_step_count'):
+        return obj.case_step_count
+    return TestCaseStep.objects.filter(element_id=obj.pk).count()
+
+
+def resolve_page_group(project, page, current_group=None):
+    """按页面名称复用任意层级分组，并为业务模块页面推断父分组。"""
+    page_name = str(page or '').strip()
+    if not page_name:
+        return None
+
+    if (
+        current_group is not None
+        and current_group.project_id == project.id
+        and current_group.name.casefold() == page_name.casefold()
+    ):
+        return current_group
+
+    groups = ElementGroup.objects.filter(project=project).select_related('parent_group').order_by('id')
+    exact_group = groups.filter(name=page_name).first()
+    if exact_group is not None and exact_group.parent_group_id is not None:
+        return exact_group
+    roots = [group for group in groups if group.parent_group_id is None]
+
+    # 新录制的“Post Create”或“Post-Settings”页面自动归入 Post 模块。
+    # 仅匹配带分隔符的前缀，避免把“Postcard”误判为 Post 子页面。
+    page_folded = page_name.casefold()
+    parent = None
+    for candidate in sorted(roots, key=lambda group: len(group.name), reverse=True):
+        prefix = candidate.name.strip()
+        prefix_folded = prefix.casefold()
+        if prefix and page_folded.startswith(prefix_folded) and len(page_folded) > len(prefix_folded):
+            separator = page_name[len(prefix):len(prefix) + 1]
+            if separator in {' ', '/', '-', '_'}:
+                parent = candidate
+                break
+
+    if parent is None and exact_group is not None:
+        return exact_group
+
+    if parent is None:
+        return ElementGroup.objects.create(
+            project=project,
+            name=page_name,
+            parent_group=None,
+            description='由元素页面自动创建',
+        )
+
+    child_name = page_name[len(parent.name):].lstrip(' /-_').strip()
+    if not child_name:
+        return exact_group or parent
+    existing_child = ElementGroup.objects.filter(
+        project=project,
+        parent_group=parent,
+        name__iexact=child_name,
+    ).order_by('id').first()
+    if existing_child is not None:
+        return existing_child
+
+    # Store only the module-local page name so it matches the element tree.
+    child_name = child_name[:1].upper() + child_name[1:]
+    return ElementGroup.objects.create(
+        project=project,
+        name=child_name,
+        parent_group=parent,
+        description='由元素页面自动创建',
+    )
+
+
 def validate_test_case_step_data(
     *,
     action_type,
@@ -164,6 +235,7 @@ class ElementSerializer(serializers.ModelSerializer):
     project = UiProjectSerializer(read_only=True)
     locator_strategy = LocatorStrategySerializer(read_only=True)
     created_by = UserSerializer(read_only=True)
+    usage_count = serializers.SerializerMethodField()
     project_id = serializers.IntegerField(write_only=True)
     group_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     locator_strategy_id = serializers.IntegerField()  # 显式定义，支持读写
@@ -172,6 +244,9 @@ class ElementSerializer(serializers.ModelSerializer):
         model = Element
         fields = '__all__'
         read_only_fields = ('created_at', 'updated_at', 'created_by')
+
+    def get_usage_count(self, obj):
+        return _element_case_step_count(obj)
 
     def validate_project_id(self, value):
         """验证项目ID是否有效"""
@@ -212,18 +287,8 @@ class ElementSerializer(serializers.ModelSerializer):
         return value
 
     @staticmethod
-    def _resolve_page_group(project, page):
-        """将元素页面名称解析为项目下的顶层元素分组。"""
-        page_name = str(page or '').strip()
-        if not page_name:
-            return None
-        group, _ = ElementGroup.objects.get_or_create(
-            project=project,
-            name=page_name,
-            parent_group=None,
-            defaults={'description': '由元素页面自动创建'},
-        )
-        return group
+    def _resolve_page_group(project, page, current_group=None):
+        return resolve_page_group(project, page, current_group=current_group)
 
     def create(self, validated_data):
         # 处理外键字段
@@ -244,9 +309,12 @@ class ElementSerializer(serializers.ModelSerializer):
             )
         elif validated_data.get('page'):
             # API 调用方通常只提交 page；保持页面字段与元素树分组一致。
-            validated_data['group'] = self._resolve_page_group(
+            group = self._resolve_page_group(
                 validated_data['project'], validated_data['page']
             )
+            validated_data['group'] = group
+            if group:
+                validated_data['page'] = group.name
 
         return super().create(validated_data)
 
@@ -269,9 +337,14 @@ class ElementSerializer(serializers.ModelSerializer):
             )
         elif not group_field_present and 'page' in validated_data:
             # 修改页面时未显式传 group_id，自动移动到对应页面分组。
-            validated_data['group'] = self._resolve_page_group(
-                validated_data.get('project', instance.project), validated_data.get('page')
+            group = self._resolve_page_group(
+                validated_data.get('project', instance.project),
+                validated_data.get('page'),
+                current_group=instance.group,
             )
+            validated_data['group'] = group
+            if group:
+                validated_data['page'] = group.name
 
         return super().update(instance, validated_data)
 
@@ -464,6 +537,7 @@ class ElementEnhancedSerializer(serializers.ModelSerializer):
     children_elements = serializers.SerializerMethodField()
     all_locators = serializers.SerializerMethodField()
     usage_scripts = serializers.SerializerMethodField()
+    usage_count = serializers.SerializerMethodField()
 
     # Write-only fields for foreign keys
     project_id = serializers.IntegerField(write_only=True)
@@ -485,6 +559,9 @@ class ElementEnhancedSerializer(serializers.ModelSerializer):
                 'page': obj.parent_element.page
             }
         return None
+
+    def get_usage_count(self, obj):
+        return _element_case_step_count(obj)
 
     def get_children_elements(self, obj):
         """获取子元素"""
@@ -553,6 +630,18 @@ class ElementEnhancedSerializer(serializers.ModelSerializer):
                 validated_data['parent_element'] = None
 
         return super().update(instance, validated_data)
+
+
+class ElementCompactSerializer(serializers.ModelSerializer):
+    """测试步骤元素选择器使用的轻量元素数据。"""
+    locator_strategy = serializers.CharField(source='locator_strategy.name', read_only=True)
+
+    class Meta:
+        model = Element
+        fields = (
+            'id', 'name', 'element_type', 'locator_strategy', 'locator_value',
+            'locator_options', 'page', 'group_id',
+        )
 
 
 class PageObjectSerializer(serializers.ModelSerializer):
