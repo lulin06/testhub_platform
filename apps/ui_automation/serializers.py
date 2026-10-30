@@ -1022,7 +1022,7 @@ class UiScheduledTaskSerializer(serializers.ModelSerializer):
             if notification_type in ['webhook', 'both']:
                 # 如果需要Webhook通知，优先选择Webhook配置
                 notification_config = UnifiedNotificationConfig.objects.filter(
-                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk'],
+                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk', 'webhook_slack'],
                     is_active=True
                 ).first()
 
@@ -1067,7 +1067,7 @@ class UiScheduledTaskSerializer(serializers.ModelSerializer):
             if notification_type in ['webhook', 'both']:
                 # 如果需要Webhook通知，优先选择Webhook配置
                 notification_config = UnifiedNotificationConfig.objects.filter(
-                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk'],
+                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk', 'webhook_slack'],
                     is_active=True
                 ).first()
 
@@ -1191,7 +1191,8 @@ class UiNotificationLogSerializer(serializers.ModelSerializer):
             type_map = {
                 'wechat': '企微机器人',
                 'feishu': '飞书机器人',
-                'dingtalk': '钉钉机器人'
+                'dingtalk': '钉钉机器人',
+                'slack': 'Slack 机器人'
             }
             return type_map.get(bot_type, 'Webhook机器人')
 

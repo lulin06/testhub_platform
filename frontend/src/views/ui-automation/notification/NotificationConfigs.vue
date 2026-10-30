@@ -188,6 +188,59 @@
             </div>
           </div>
         </el-tab-pane>
+
+        <!-- Slack Incoming Webhook 机器人Tab -->
+        <el-tab-pane :label="$t('uiAutomation.notification.configs.slackBot')" name="slack">
+          <div class="tab-content">
+            <div class="config-section">
+              <el-form
+                  ref="slackFormRef"
+                  :model="webhookBots.slack"
+                  label-position="top"
+                  class="config-form"
+              >
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item :label="$t('uiAutomation.notification.configs.botName')">
+                      <el-input
+                          v-model="webhookBots.slack.name"
+                          :placeholder="$t('uiAutomation.notification.configs.slackBotNamePlaceholder')"
+                      />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item :label="$t('uiAutomation.notification.configs.enable')">
+                      <el-switch v-model="webhookBots.slack.enabled"/>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="24">
+                    <el-form-item :label="$t('uiAutomation.notification.configs.webhookUrl')">
+                      <el-input
+                          v-model="webhookBots.slack.webhook_url"
+                          :placeholder="$t('uiAutomation.notification.configs.slackWebhookPlaceholder')"
+                      />
+                      <div class="form-item-hint">
+                        {{ $t('uiAutomation.notification.configs.slackUrlHint') }}
+                      </div>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="24">
+                    <el-form-item :label="$t('uiAutomation.notification.configs.businessType')">
+                      <el-checkbox v-model="webhookBots.slack.enable_ui_automation">{{ $t('uiAutomation.notification.configs.uiAutomationTest') }}</el-checkbox>
+                      <el-checkbox v-model="webhookBots.slack.enable_api_testing">{{ $t('uiAutomation.notification.configs.apiTest') }}</el-checkbox>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <div class="form-actions">
+                  <el-button type="primary" @click="saveWebhookBot('slack')">
+                    {{ $t('uiAutomation.notification.configs.saveSlackConfig') }}
+                  </el-button>
+                </div>
+              </el-form>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </div>
   </div>
@@ -216,6 +269,7 @@ export default {
     const feishuFormRef = ref(null)
     const wechatFormRef = ref(null)
     const dingtalkFormRef = ref(null)
+    const slackFormRef = ref(null)
     const activeTab = ref('feishu')
 
     // Webhook机器人配置
@@ -241,6 +295,13 @@ export default {
         enabled: true,
         enable_ui_automation: true,
         enable_api_testing: true
+      },
+      slack: {
+        name: '',
+        webhook_url: '',
+        enabled: true,
+        enable_ui_automation: true,
+        enable_api_testing: true
       }
     })
 
@@ -249,7 +310,8 @@ export default {
       const configTypeMap = {
         'feishu': 'webhook_feishu',
         'wechat': 'webhook_wechat',
-        'dingtalk': 'webhook_dingtalk'
+        'dingtalk': 'webhook_dingtalk',
+        'slack': 'webhook_slack'
       }
       return configTypeMap[botType]
     }
@@ -259,7 +321,8 @@ export default {
       const displayNameMap = {
         'feishu': t('uiAutomation.notification.configs.platforms.feishu'),
         'wechat': t('uiAutomation.notification.configs.platforms.wechatWork'),
-        'dingtalk': t('uiAutomation.notification.configs.platforms.dingtalk')
+        'dingtalk': t('uiAutomation.notification.configs.platforms.dingtalk'),
+        'slack': t('uiAutomation.notification.configs.platforms.slack')
       }
       return displayNameMap[botType] || botType
     }
@@ -268,7 +331,7 @@ export default {
     const saveWebhookBot = async (botType) => {
       const formRef = botType === 'feishu' ? feishuFormRef.value :
           botType === 'wechat' ? wechatFormRef.value :
-              dingtalkFormRef.value
+              botType === 'dingtalk' ? dingtalkFormRef.value : slackFormRef.value
 
       if (!formRef) return
 
@@ -322,7 +385,8 @@ export default {
           // 更新现有配置
           await updateUnifiedNotificationConfig(webhookConfigId, requestData)
           const successMsgKey = botType === 'feishu' ? 'feishuUpdateSuccess' :
-              botType === 'wechat' ? 'wechatUpdateSuccess' : 'dingtalkUpdateSuccess'
+              botType === 'wechat' ? 'wechatUpdateSuccess' :
+                  botType === 'dingtalk' ? 'dingtalkUpdateSuccess' : 'slackUpdateSuccess'
           ElMessage.success(t(`uiAutomation.notification.configs.messages.${successMsgKey}`))
         } else {
           // 创建新配置
@@ -350,7 +414,8 @@ export default {
 
           await createUnifiedNotificationConfig(requestData)
           const successMsgKey = botType === 'feishu' ? 'feishuCreateSuccess' :
-              botType === 'wechat' ? 'wechatCreateSuccess' : 'dingtalkCreateSuccess'
+              botType === 'wechat' ? 'wechatCreateSuccess' :
+                  botType === 'dingtalk' ? 'dingtalkCreateSuccess' : 'slackCreateSuccess'
           ElMessage.success(t(`uiAutomation.notification.configs.messages.${successMsgKey}`))
         }
 
@@ -359,7 +424,8 @@ export default {
       } catch (error) {
         console.error('保存Webhook机器人配置失败:', error)
         const failedMsgKey = botType === 'feishu' ? 'feishuSaveFailed' :
-            botType === 'wechat' ? 'wechatSaveFailed' : 'dingtalkSaveFailed'
+            botType === 'wechat' ? 'wechatSaveFailed' :
+                botType === 'dingtalk' ? 'dingtalkSaveFailed' : 'slackSaveFailed'
         ElMessage.error(t(`uiAutomation.notification.configs.messages.${failedMsgKey}`) + ': ' + (error.response?.data?.detail || error.message))
       }
     }
@@ -417,6 +483,7 @@ export default {
       feishuFormRef,
       wechatFormRef,
       dingtalkFormRef,
+      slackFormRef,
       activeTab,
       webhookBots,
       saveWebhookBot,

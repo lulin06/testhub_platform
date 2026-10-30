@@ -79,6 +79,8 @@ def _openapi(document):
     if not isinstance(document.get('paths'), dict):
         raise ValueError('OpenAPI/Swagger 文档缺少 paths')
     requests = []
+    info = document.get('info')
+    document_name = str(info.get('title') or '').strip() if isinstance(info, dict) else ''
     for path, path_item in document['paths'].items():
         if not isinstance(path_item, dict):
             continue
@@ -123,11 +125,13 @@ def _openapi(document):
                 consumes = document.get('consumes') or ['application/json']
                 headers.setdefault('Content-Type', consumes[0])
             tags = operation.get('tags') or ['Imported APIs']
+            group_parts = [document_name] if document_name else []
+            group_parts.append(str(tags[0]))
             requests.append({
                 'name': operation.get('summary') or operation.get('operationId') or f'{method} {path}',
                 'description': operation.get('description', ''), 'method': method, 'url': url,
                 'headers': headers, 'params': params, 'body': body,
-                'group': str(tags[0]), 'path': path,
+                'group': ' / '.join(group_parts), 'group_path': group_parts, 'path': path,
             })
     if not requests:
         raise ValueError('文档中没有可导入的 HTTP 接口')
@@ -160,6 +164,10 @@ def _postman(document):
     if not isinstance(items, list):
         raise ValueError('Postman Collection 文档缺少 item')
     requests = []
+    collection_name = ''
+    info = document.get('info')
+    if isinstance(info, dict):
+        collection_name = str(info.get('name') or '').strip()
 
     def visit(nodes, folders):
         for node in nodes:
@@ -198,14 +206,18 @@ def _postman(document):
                 body = {'type': 'x-www-form-urlencoded' if mode == 'urlencoded' else 'form-data',
                         'data': {p.get('key'): p.get('value', '') for p in source
                                  if isinstance(p, dict) and p.get('key') and not p.get('disabled')}}
+            group_path = ([collection_name] if collection_name else []) + folders
             requests.append({
                 'name': node.get('name') or f'{method} {_postman_url(url_data)}',
                 'description': request.get('description', ''), 'method': method,
                 'url': request_url, 'headers': headers, 'params': params,
-                'body': body, 'group': ' / '.join(folders) if folders else 'Imported APIs',
+                'body': body,
+                'group': ' / '.join(group_path) if group_path else 'Imported APIs',
+                'group_path': group_path or ['Imported APIs'],
                 'path': request_path,
             })
 
+    # 优先保留 Postman JSON 中的集合名称，避免导入后根级接口落到默认分组。
     visit(items, [])
     if not requests:
         raise ValueError('Postman Collection 中没有可导入的 HTTP 接口')

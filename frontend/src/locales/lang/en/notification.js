@@ -2,14 +2,15 @@ export default {
   // Page title
   configs: {
     title: 'Notification Configuration',
-    description: 'Configure Feishu, WeCom, DingTalk Webhook bot addresses'
+    description: 'Configure Feishu, WeCom, DingTalk, and Slack Webhook bot addresses'
   },
 
   // Bot types
   botTypes: {
     feishu: 'Feishu Bot',
     wechat: 'WeCom Bot',
-    dingtalk: 'DingTalk Bot'
+    dingtalk: 'DingTalk Bot',
+    slack: 'Slack Bot'
   },
 
   // Form labels
@@ -31,7 +32,9 @@ export default {
     wechatWebhook: 'Enter WeCom bot Webhook URL',
     dingtalkBotName: 'Enter DingTalk bot name',
     dingtalkWebhook: 'Enter DingTalk bot Webhook URL',
-    dingtalkSecret: 'Enter DingTalk bot signature key (optional)'
+    dingtalkSecret: 'Enter DingTalk bot signature key (optional)',
+    slackBotName: 'Enter Slack bot name',
+    slackWebhook: 'Enter Slack Incoming Webhook URL'
   },
 
   // Hints
@@ -39,14 +42,16 @@ export default {
     feishuWebhook: 'Feishu bot Webhook URL format: https://open.feishu.cn/open-apis/bot/v2/hook/...',
     wechatWebhook: 'WeCom bot Webhook URL format: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...',
     dingtalkWebhook: 'DingTalk bot Webhook URL format: https://oapi.dingtalk.com/robot/send?access_token=...',
-    dingtalkSecret: 'DingTalk bot signature key for security verification. Fill in this field if the bot has enabled "Sign" security settings.'
+    dingtalkSecret: 'DingTalk bot signature key for security verification. Fill in this field if the bot has enabled "Sign" security settings.',
+    slackWebhook: 'Slack Incoming Webhook URL format: https://hooks.slack.com/services/...'
   },
 
   // Button text
   buttons: {
     saveFeishu: 'Save Feishu Bot Configuration',
     saveWechat: 'Save WeCom Bot Configuration',
-    saveDingtalk: 'Save DingTalk Bot Configuration'
+    saveDingtalk: 'Save DingTalk Bot Configuration',
+    saveSlack: 'Save Slack Bot Configuration'
   },
 
   // Messages

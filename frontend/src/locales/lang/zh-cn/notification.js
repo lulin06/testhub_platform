@@ -2,14 +2,15 @@ export default {
   // 页面标题
   configs: {
     title: '通知配置',
-    description: '配置飞书、企微、钉钉Webhook机器人地址'
+    description: '配置飞书、企微、钉钉、Slack Webhook机器人地址'
   },
 
   // 机器人类型
   botTypes: {
     feishu: '飞书机器人',
     wechat: '企微机器人',
-    dingtalk: '钉钉机器人'
+    dingtalk: '钉钉机器人',
+    slack: 'Slack 机器人'
   },
 
   // 表单标签
@@ -31,7 +32,9 @@ export default {
     wechatWebhook: '请输入企业微信机器人Webhook URL',
     dingtalkBotName: '请输入钉钉机器人名称',
     dingtalkWebhook: '请输入钉钉机器人Webhook URL',
-    dingtalkSecret: '请输入钉钉机器人签名密钥（可选）'
+    dingtalkSecret: '请输入钉钉机器人签名密钥（可选）',
+    slackBotName: '请输入 Slack 机器人名称',
+    slackWebhook: '请输入 Slack Incoming Webhook URL'
   },
 
   // 提示信息
@@ -39,14 +42,16 @@ export default {
     feishuWebhook: '飞书机器人Webhook URL格式：https://open.feishu.cn/open-apis/bot/v2/hook/...',
     wechatWebhook: '企业微信机器人Webhook URL格式：https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...',
     dingtalkWebhook: '钉钉机器人Webhook URL格式：https://oapi.dingtalk.com/robot/send?access_token=...',
-    dingtalkSecret: '钉钉机器人的签名密钥，用于安全验证。如果机器人开启了"加签"安全设置，请填写此字段。'
+    dingtalkSecret: '钉钉机器人的签名密钥，用于安全验证。如果机器人开启了"加签"安全设置，请填写此字段。',
+    slackWebhook: 'Slack Incoming Webhook URL 格式：https://hooks.slack.com/services/...'
   },
 
   // 按钮文本
   buttons: {
     saveFeishu: '保存飞书机器人配置',
     saveWechat: '保存企微机器人配置',
-    saveDingtalk: '保存钉钉机器人配置'
+    saveDingtalk: '保存钉钉机器人配置',
+    saveSlack: '保存 Slack 机器人配置'
   },
 
   // 消息

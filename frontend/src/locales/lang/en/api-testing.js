@@ -199,6 +199,7 @@ export default {
       fileTip: 'JSON / YAML supported, up to 10 MB',
       targetProject: 'Target Project',
       selectProject: 'Select a project',
+      targetCollection: 'Target Collection',
       parsed: 'Parsed {count} interfaces',
       urlMissing: 'No interface URL in source file',
       reselect: 'Choose another file',
@@ -214,6 +215,8 @@ export default {
     },
     importCurl: 'Import cURL',
     exportCurl: 'Export as cURL',
+    exportCollectionSuccess: 'Collection interfaces exported',
+    exportCollectionFailed: 'Failed to export collection interfaces',
     referDataFactory: 'Reference Data Factory',
     variableHelper: 'Variable Helper',
     insertDynamicVariable: 'Insert Dynamic Variable',
@@ -311,6 +314,8 @@ export default {
     contextMenu: {
       addRequest: 'Add Request',
       addSubCollection: 'Add Sub-collection',
+      import: 'Import Interfaces',
+      export: 'Export Interfaces',
       edit: 'Edit',
       delete: 'Delete',
       copy: 'Copy'

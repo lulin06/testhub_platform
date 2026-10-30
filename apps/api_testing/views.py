@@ -21,6 +21,7 @@ import json
 import logging
 import uuid
 import subprocess
+from urllib.parse import quote
 from datetime import datetime, timedelta
 
 from .models import (
@@ -303,6 +304,93 @@ class ApiCollectionViewSet(viewsets.ModelViewSet):
         )
         instance.delete()
 
+    @action(detail=True, methods=['get'], url_path='export')
+    def export_collection(self, request, pk=None):
+        """将集合及其所有子集合导出为 Postman Collection。"""
+        collection = self.get_object()
+
+        def key_value_rows(value):
+            if isinstance(value, list):
+                return [
+                    {
+                        'key': row.get('key', ''),
+                        'value': row.get('value', ''),
+                        'description': row.get('description', ''),
+                        'disabled': row.get('enabled') is False,
+                    }
+                    for row in value
+                    if isinstance(row, dict) and row.get('key')
+                ]
+            if isinstance(value, dict):
+                return [{'key': key, 'value': value_item} for key, value_item in value.items()]
+            return []
+
+        def postman_request(api_request):
+            params = key_value_rows(api_request.params)
+            headers = key_value_rows(api_request.headers)
+            url = api_request.url or ''
+            if params:
+                query = '&'.join(
+                    f"{row['key']}={row['value']}" for row in params if not row.get('disabled')
+                )
+                separator = '&' if '?' in url else '?'
+                url = f'{url}{separator}{query}' if query else url
+
+            request_data = {
+                'method': api_request.method,
+                'header': headers,
+                'url': {'raw': url},
+            }
+            body = api_request.body or {}
+            body_type = body.get('type') if isinstance(body, dict) else None
+            body_data = body.get('data') if isinstance(body, dict) else None
+            if body_type == 'json':
+                request_data['body'] = {
+                    'mode': 'raw',
+                    'raw': json.dumps(body_data, ensure_ascii=False, indent=2),
+                    'options': {'raw': {'language': 'json'}},
+                }
+            elif body_type == 'raw':
+                request_data['body'] = {'mode': 'raw', 'raw': body_data or ''}
+            elif body_type == 'form-data':
+                request_data['body'] = {'mode': 'formdata', 'formdata': body_data or []}
+            elif body_type == 'x-www-form-urlencoded':
+                request_data['body'] = {'mode': 'urlencoded', 'urlencoded': body_data or []}
+
+            # WebSocket 接口也保留在导出结果中，并在描述中记录 TestHub 接口类型。
+            if api_request.request_type != 'HTTP':
+                request_data['description'] = f'[TestHub request type: {api_request.request_type}]'
+            return {'name': api_request.name, 'request': request_data}
+
+        def collection_item(current):
+            items = [postman_request(api_request) for api_request in current.requests.all()]
+            items.extend(collection_item(child) for child in current.children.all())
+            return {'name': current.name, 'description': current.description, 'item': items}
+
+        payload = {
+            'info': {
+                'name': collection.name,
+                'description': collection.description,
+                'schema': 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+            },
+            'item': collection_item(collection)['item'],
+        }
+        # 文件名沿用所选根集合名称，同时去除会破坏响应头的字符。
+        safe_collection_name = ''.join(
+            char for char in collection.name if char not in {'"', '\r', '\n'}
+        ).strip() or 'collection'
+        filename = quote(f'{safe_collection_name}.postman_collection.json', safe='')
+        response = HttpResponse(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            content_type='application/json; charset=utf-8',
+        )
+        # 同时提供普通和 RFC 5987 文件名，确保不同浏览器都保留所选根集合名称。
+        response['Content-Disposition'] = (
+            f'attachment; filename="{safe_collection_name}.postman_collection.json"; '
+            f"filename*=UTF-8''{filename}"
+        )
+        return response
+
 class ApiRequestViewSet(viewsets.ModelViewSet):
     queryset = ApiRequest.objects.all()
     serializer_class = ApiRequestSerializer
@@ -418,7 +506,7 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='import-batch')
     def import_batch(self, request):
-        """Create selected imported interfaces under their source groups."""
+        """将选中的导入接口按源文件分组创建。"""
         try:
             items = self._parse_import_file(request)
         except ValueError as exc:
@@ -435,6 +523,15 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
         ).distinct().first()
         if not project:
             return Response({'error': '无权访问目标项目'}, status=status.HTTP_403_FORBIDDEN)
+        target_collection = None
+        target_collection_id = request.data.get('collection')
+        if target_collection_id:
+            target_collection = ApiCollection.objects.filter(
+                id=target_collection_id,
+                project=project,
+            ).first()
+            if not target_collection:
+                return Response({'error': '目标集合无效'}, status=status.HTTP_400_BAD_REQUEST)
         selected = [(index, item) for index, item in enumerate(items) if index in selected_ids]
         if not selected:
             return Response({'error': '请至少选择一个接口'}, status=status.HTTP_400_BAD_REQUEST)
@@ -443,13 +540,31 @@ class ApiRequestViewSet(viewsets.ModelViewSet):
                 collection_by_name = {}
                 created = 0
                 for index, item in selected:
-                    group = item['group']
-                    collection = collection_by_name.get(group)
-                    if collection is None:
-                        collection = ApiCollection.objects.create(
-                            project=project, name=group, description='由接口定义文件导入',
-                        )
-                        collection_by_name[group] = collection
+                    # 使用解析器保留的结构化路径，避免集合名称中的斜杠造成错误拆分。
+                    group_path = item.get('group_path')
+                    if isinstance(group_path, list):
+                        group_parts = [str(part).strip() for part in group_path if str(part).strip()]
+                    else:
+                        group_parts = [part.strip() for part in item.get('group', '').split('/') if part.strip()]
+                    if not group_parts:
+                        group_parts = ['Imported APIs']
+                    parent = target_collection
+                    path_parts = []
+                    collection = None
+                    for part in group_parts:
+                        path_parts.append(part)
+                        # 元组按层级区分集合，根集合和子集合不会被合并。
+                        path_key = tuple(path_parts)
+                        collection = collection_by_name.get(path_key)
+                        if collection is None:
+                            collection = ApiCollection.objects.create(
+                                project=project,
+                                parent=parent,
+                                name=part,
+                                description='由接口定义文件导入',
+                            )
+                            collection_by_name[path_key] = collection
+                        parent = collection
                     ApiRequest.objects.create(
                         collection=collection,
                         name=item['name'][:200], description=item.get('description', ''),
@@ -2278,7 +2393,7 @@ class ScheduledTaskViewSet(viewsets.ModelViewSet):
             try:
                 from apps.core.models import UnifiedNotificationConfig
                 all_webhook_configs = UnifiedNotificationConfig.objects.filter(
-                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk'],
+                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk', 'webhook_slack'],
                     is_active=True
                 )
                 logger.info("使用统一通知配置 (UnifiedNotificationConfig)")
@@ -2423,6 +2538,11 @@ class ScheduledTaskViewSet(viewsets.ModelViewSet):
                         logger.info(f"最终URL: {webhook_url}")
                     else:
                         logger.info("钉钉机器人未配置签名密钥，使用无签名模式")
+                elif bot_type == 'slack':  # Slack Incoming Webhook
+                    # Slack Incoming Webhook 接收简单的 text 载荷。
+                    message_data = {
+                        "text": f"定时任务执行{status_text}\n任务名称: {task.name}\n执行状态: {status_text}\n执行时间: {execution_log.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n任务类型: {'测试套件执行' if task.task_type == 'TEST_SUITE' else 'API请求执行'}"
+                    }
                 else:  # 通用格式
                     message_data = {
                         "text": f"定时任务执行{status_text}\n任务名称: {task.name}\n执行状态: {status_text}\n执行时间: {execution_log.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n任务类型: {'测试套件执行' if task.task_type == 'TEST_SUITE' else 'API请求执行'}"

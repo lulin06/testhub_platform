@@ -8,19 +8,20 @@ User = get_user_model()
 
 
 class UnifiedNotificationConfig(models.Model):
-    """统一通知配置模型 - 用于配置飞书、企微、钉钉机器人"""
+    """统一通知配置模型 - 用于配置飞书、企微、钉钉、Slack 机器人"""
 
     CONFIG_TYPE_CHOICES = [
         ('webhook_feishu', '飞书机器人'),
         ('webhook_wechat', '企业微信机器人'),
         ('webhook_dingtalk', '钉钉机器人'),
+        ('webhook_slack', 'Slack 机器人'),
     ]
 
     name = models.CharField(max_length=100, verbose_name='配置名称', help_text='用于标识该通知配置的名称')
     config_type = models.CharField(max_length=20, choices=CONFIG_TYPE_CHOICES, default='webhook_feishu',
                                    verbose_name='配置类型')
     webhook_bots = models.JSONField(default=dict, blank=True, null=True, verbose_name='Webhook机器人配置',
-                                    help_text='飞书、企微、钉钉机器人配置')
+                                    help_text='飞书、企微、钉钉、Slack 机器人配置')
     is_default = models.BooleanField(default=False, verbose_name='是否默认配置')
     is_active = models.BooleanField(default=True, verbose_name='是否启用')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')

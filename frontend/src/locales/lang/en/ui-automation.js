@@ -853,7 +853,7 @@ export default {
     configs: {
       title: 'Notification Configs',
       pageTitle: 'UI Automation Notification Config',
-      pageDesc: 'Configure Feishu, WeCom, DingTalk Webhook robot addresses',
+      pageDesc: 'Configure Feishu, WeCom, DingTalk, and Slack Webhook robot addresses',
       newConfig: 'New Config',
       searchPlaceholder: 'Search config name',
       configName: 'Config Name',
@@ -880,6 +880,7 @@ export default {
       feishuBot: 'Feishu Robot',
       wechatBot: 'WeCom Robot',
       dingtalkBot: 'DingTalk Robot',
+      slackBot: 'Slack Bot',
       // Form hints
       feishuBotNamePlaceholder: 'Please enter Feishu robot name',
       feishuUrlHint: 'Feishu Webhook URL format: https://open.feishu.cn/open-apis/bot/v2/hook/...',
@@ -887,14 +888,19 @@ export default {
       wechatUrlHint: 'WeCom Webhook URL format: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...',
       dingtalkBotNamePlaceholder: 'Please enter DingTalk robot name',
       dingtalkUrlHint: 'DingTalk Webhook URL format: https://oapi.dingtalk.com/robot/send?access_token=...',
+      slackBotNamePlaceholder: 'Please enter Slack bot name',
+      slackWebhookPlaceholder: 'Please enter Slack Incoming Webhook URL',
+      slackUrlHint: 'Slack Incoming Webhook URL format: https://hooks.slack.com/services/...',
       // Save buttons
       saveFeishuConfig: 'Save Feishu Robot Config',
       saveWechatConfig: 'Save WeCom Robot Config',
       saveDingtalkConfig: 'Save DingTalk Robot Config',
+      saveSlackConfig: 'Save Slack Bot Config',
       platforms: {
         feishu: 'Feishu',
         wechatWork: 'WeCom',
-        dingtalk: 'DingTalk'
+        dingtalk: 'DingTalk',
+        slack: 'Slack'
       },
       rules: {
         nameRequired: 'Please enter config name',
@@ -922,6 +928,9 @@ export default {
         dingtalkUpdateSuccess: 'DingTalk robot config updated successfully',
         dingtalkCreateSuccess: 'DingTalk robot config created successfully',
         dingtalkSaveFailed: 'Failed to save DingTalk robot config',
+        slackUpdateSuccess: 'Slack bot config updated successfully',
+        slackCreateSuccess: 'Slack bot config created successfully',
+        slackSaveFailed: 'Failed to save Slack bot config',
         noExistingConfig: 'No existing Webhook config found, will create new config',
         getConfigFailed: 'Failed to get Webhook robot config',
         getAllConfigFailed: 'Failed to get all Webhook robot configs'

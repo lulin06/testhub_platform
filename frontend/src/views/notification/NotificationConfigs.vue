@@ -189,6 +189,59 @@
             </div>
           </div>
         </el-tab-pane>
+
+        <!-- Slack Incoming Webhook 机器人Tab -->
+        <el-tab-pane :label="$t('notification.botTypes.slack')" name="slack">
+          <div class="tab-content">
+            <div class="config-section">
+              <el-form
+                  ref="slackFormRef"
+                  :model="webhookBots.slack"
+                  label-position="top"
+                  class="config-form"
+              >
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item :label="$t('notification.form.botName')">
+                      <el-input
+                          v-model="webhookBots.slack.name"
+                          :placeholder="$t('notification.placeholders.slackBotName')"
+                      />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item :label="$t('notification.form.enabled')">
+                      <el-switch v-model="webhookBots.slack.enabled"/>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="24">
+                    <el-form-item :label="$t('notification.form.webhookUrl')">
+                      <el-input
+                          v-model="webhookBots.slack.webhook_url"
+                          :placeholder="$t('notification.placeholders.slackWebhook')"
+                      />
+                      <div class="form-item-hint">
+                        {{ $t('notification.hints.slackWebhook') }}
+                      </div>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="24">
+                    <el-form-item :label="$t('notification.form.businessType')">
+                      <el-checkbox v-model="webhookBots.slack.enable_ui_automation">{{ $t('notification.form.uiAutomation') }}</el-checkbox>
+                      <el-checkbox v-model="webhookBots.slack.enable_api_testing">{{ $t('notification.form.apiTesting') }}</el-checkbox>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <div class="form-actions">
+                  <el-button type="primary" @click="saveWebhookBot('slack')">
+                    {{ $t('notification.buttons.saveSlack') }}
+                  </el-button>
+                </div>
+              </el-form>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </div>
   </div>
@@ -217,6 +270,7 @@ export default {
     const feishuFormRef = ref(null)
     const wechatFormRef = ref(null)
     const dingtalkFormRef = ref(null)
+    const slackFormRef = ref(null)
     const activeTab = ref('feishu')
 
 
@@ -243,6 +297,13 @@ export default {
         enabled: true,
         enable_ui_automation: true,
         enable_api_testing: true
+      },
+      slack: {
+        name: '',
+        webhook_url: '',
+        enabled: true,
+        enable_ui_automation: true,
+        enable_api_testing: true
       }
     })
 
@@ -251,7 +312,8 @@ export default {
       const typeMap = {
         'feishu': t('notification.botTypes.feishu'),
         'wechat': t('notification.botTypes.wechat'),
-        'dingtalk': t('notification.botTypes.dingtalk')
+        'dingtalk': t('notification.botTypes.dingtalk'),
+        'slack': t('notification.botTypes.slack')
       }
       return typeMap[botType] || botType
     }
@@ -261,7 +323,8 @@ export default {
       const configTypeMap = {
         'feishu': 'webhook_feishu',
         'wechat': 'webhook_wechat',
-        'dingtalk': 'webhook_dingtalk'
+        'dingtalk': 'webhook_dingtalk',
+        'slack': 'webhook_slack'
       }
       return configTypeMap[botType]
     }
@@ -270,7 +333,7 @@ export default {
     const saveWebhookBot = async (botType) => {
       const formRef = botType === 'feishu' ? feishuFormRef.value :
           botType === 'wechat' ? wechatFormRef.value :
-              dingtalkFormRef.value
+              botType === 'dingtalk' ? dingtalkFormRef.value : slackFormRef.value
 
       if (!formRef) return
 
@@ -414,6 +477,7 @@ export default {
       feishuFormRef,
       wechatFormRef,
       dingtalkFormRef,
+      slackFormRef,
       activeTab,
       webhookBots,
       saveWebhookBot,

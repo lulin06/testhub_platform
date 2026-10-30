@@ -663,6 +663,8 @@
     >
       <li @click="addRequest">{{ $t('apiTesting.interface.contextMenu.addRequest') }}</li>
       <li @click="addCollection">{{ $t('apiTesting.interface.contextMenu.addSubCollection') }}</li>
+      <li v-if="rightClickedNode?.type === 'collection'" @click="openCollectionImport">{{ $t('apiTesting.interface.contextMenu.import') }}</li>
+      <li v-if="rightClickedNode?.type === 'collection'" @click="exportCollection">{{ $t('apiTesting.interface.contextMenu.export') }}</li>
       <li @click="editNode">{{ $t('apiTesting.interface.contextMenu.edit') }}</li>
       <li @click="deleteNode">{{ $t('apiTesting.interface.contextMenu.delete') }}</li>
     </ul>
@@ -767,9 +769,12 @@
             </el-upload>
           </el-form-item>
           <el-form-item :label="$t('apiTesting.interface.importBatch.targetProject')">
-            <el-select v-model="importProjectId" :placeholder="$t('apiTesting.interface.importBatch.selectProject')" style="width: 100%">
+            <el-select v-model="importProjectId" :placeholder="$t('apiTesting.interface.importBatch.selectProject')" :disabled="Boolean(importCollectionId)" style="width: 100%">
               <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
             </el-select>
+          </el-form-item>
+          <el-form-item v-if="importCollectionId" :label="$t('apiTesting.interface.importBatch.targetCollection')">
+            <el-input :model-value="importTargetCollectionName" readonly />
           </el-form-item>
         </el-form>
       </template>
@@ -1073,6 +1078,7 @@ const batchImportUploadRef = ref(null)
 const importFormat = ref('openapi')
 const importFile = ref(null)
 const importProjectId = ref(null)
+const importCollectionId = ref(null)
 const importPreview = ref(null)
 const selectedImportIds = ref([])
 const importLoading = ref(false)
@@ -1088,10 +1094,21 @@ const importItemPath = (item) => {
   }
 }
 const importItemName = (item) => item.name || `${item.method || ''} ${importItemPath(item)}`.trim()
+const importTargetCollectionName = computed(() => {
+  const collection = flatCollections.value.find(item => String(item.id) === String(importCollectionId.value))
+  return collection?.name || ''
+})
 
-const openBatchImport = () => {
+const openBatchImport = (targetCollection = null) => {
   importProjectId.value = selectedProject.value
+  importCollectionId.value = targetCollection?.id || null
   showBatchImportDialog.value = true
+}
+
+const openCollectionImport = () => {
+  if (rightClickedNode.value?.type !== 'collection') return
+  openBatchImport(rightClickedNode.value)
+  showContextMenu.value = false
 }
 
 const onBatchImportFileChange = (file) => {
@@ -1104,6 +1121,7 @@ const onBatchImportFileRemove = () => {
 
 const resetBatchImport = () => {
   importFile.value = null
+  importCollectionId.value = null
   importPreview.value = null
   selectedImportIds.value = []
   importLoading.value = false
@@ -1137,6 +1155,7 @@ const createImportFormData = (includeSelection = false) => {
   formData.append('format', importFormat.value)
   if (includeSelection) {
     formData.append('project', importProjectId.value)
+    if (importCollectionId.value) formData.append('collection', importCollectionId.value)
     selectedImportIds.value.forEach(id => formData.append('selected_ids', id))
   }
   return formData
@@ -1179,6 +1198,32 @@ const submitBatchImport = async () => {
     ElMessage.error(error.response?.data?.error || t('apiTesting.interface.importBatch.importFailed'))
   } finally {
     importLoading.value = false
+  }
+}
+
+const exportCollection = async () => {
+  const collection = rightClickedNode.value
+  if (!collection || collection.type !== 'collection') return
+
+  showContextMenu.value = false
+  try {
+    const response = await api.get(`/api-testing/collections/${collection.id}/export/`, {
+      responseType: 'blob'
+    })
+    const blobUrl = URL.createObjectURL(response.data)
+    const link = document.createElement('a')
+    const contentDisposition = response.headers['content-disposition'] || ''
+    const encodedName = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+    link.href = blobUrl
+    link.download = encodedName ? decodeURIComponent(encodedName) : `${collection.name}.postman_collection.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(blobUrl)
+    ElMessage.success(t('apiTesting.interface.exportCollectionSuccess'))
+  } catch (error) {
+    ElMessage.error(error.response?.data?.error || t('apiTesting.interface.exportCollectionFailed'))
+    console.error('导出集合接口失败:', error)
   }
 }
 

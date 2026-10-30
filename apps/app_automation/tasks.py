@@ -62,7 +62,7 @@ def _send_app_webhook_notification(task, detail_content, status_text):
     try:
         from apps.core.models import UnifiedNotificationConfig
         configs = UnifiedNotificationConfig.objects.filter(
-            config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk'],
+            config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk', 'webhook_slack'],
             is_active=True
         )
     except Exception as e:
@@ -98,6 +98,9 @@ def _send_app_webhook_notification(task, detail_content, status_text):
                 timestamp = str(round(_time.time() * 1000))
                 sign = urllib.parse.quote_plus(base64.b64encode(hmac.new(secret.encode('utf-8'), f'{timestamp}\n{secret}'.encode('utf-8'), digestmod=hashlib.sha256).digest()))
                 webhook_url += f'{"&" if "?" in webhook_url else "?"}timestamp={timestamp}&sign={sign}'
+        elif bot_type == 'slack':
+            # Slack Incoming Webhook 接收简单的 text 载荷。
+            message_data = {"text": f"APP自动化定时任务执行{status_text}\n\n{detail_content}"}
         else:
             continue
 

@@ -3364,7 +3364,7 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
             try:
                 from apps.core.models import UnifiedNotificationConfig
                 all_webhook_configs = UnifiedNotificationConfig.objects.filter(
-                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk'],
+                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk', 'webhook_slack'],
                     is_active=True
                 )
                 logger.info("使用统一通知配置 (UnifiedNotificationConfig)")
@@ -3499,6 +3499,11 @@ class UiScheduledTaskViewSet(viewsets.ModelViewSet):
                             webhook_url += f'&timestamp={timestamp}&sign={sign}'
                         else:
                             webhook_url += f'?timestamp={timestamp}&sign={sign}'
+                elif bot_type == 'slack':  # Slack Incoming Webhook
+                    # Slack Incoming Webhook 接收简单的 text 载荷。
+                    message_data = {
+                        "text": f"UI自动化定时任务执行{status_text}\n\n{detail_content}"
+                    }
                 else:
                     logger.warning(f"未知的机器人类型: {bot_type}")
                     continue

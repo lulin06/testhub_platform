@@ -42,6 +42,26 @@ class NotificationConfigApiTests(APITestCase):
         self.assertEqual(response.data['config_type'], 'webhook_feishu')
         self.assertEqual(response.data['created_by'], self.user.id)
 
+    def test_create_slack_notification_config(self):
+        """Slack Incoming Webhook 配置可以通过统一通知配置 API 保存"""
+        payload = {
+            'name': 'Slack 通知',
+            'config_type': 'webhook_slack',
+            'webhook_bots': {
+                'slack': {
+                    'name': '回归测试频道',
+                    'webhook_url': 'https://hooks.slack.com/services/T000/B000/xxx',
+                    'enabled': True,
+                    'enable_api_testing': True,
+                }
+            },
+            'is_active': True,
+        }
+        response = self.client.post(self.list_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['config_type'], 'webhook_slack')
+        self.assertEqual(response.data['webhook_bots']['slack']['name'], '回归测试频道')
+
     def test_list_and_filter_configs(self):
         """列表查询与按 config_type 过滤"""
         UnifiedNotificationConfig.objects.create(

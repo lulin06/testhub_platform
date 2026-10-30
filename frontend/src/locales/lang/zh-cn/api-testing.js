@@ -199,6 +199,7 @@ export default {
       fileTip: '支持 JSON / YAML，文件大小不超过 10 MB',
       targetProject: '目标项目',
       selectProject: '请选择项目',
+      targetCollection: '目标集合',
       parsed: '解析完成，共 {count} 个接口',
       urlMissing: '源文件未提供接口 URL',
       reselect: '重新选择文件',
@@ -214,6 +215,8 @@ export default {
     },
     importCurl: '导入CURL',
     exportCurl: '导出为CURL',
+    exportCollectionSuccess: '集合接口导出成功',
+    exportCollectionFailed: '集合接口导出失败',
     referDataFactory: '引用数据工厂',
     variableHelper: '变量助手',
     insertDynamicVariable: '插入动态变量',
@@ -323,6 +326,8 @@ export default {
     contextMenu: {
       addRequest: '添加请求',
       addSubCollection: '添加子集合',
+      import: '导入接口',
+      export: '导出接口',
       edit: '编辑',
       delete: '删除',
       copy: '复制'

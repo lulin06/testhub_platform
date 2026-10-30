@@ -853,7 +853,7 @@ export default {
     configs: {
       title: '通知配置',
       pageTitle: 'UI自动化通知配置',
-      pageDesc: '配置飞书、企微、钉钉Webhook机器人地址',
+      pageDesc: '配置飞书、企微、钉钉、Slack Webhook机器人地址',
       newConfig: '新建配置',
       searchPlaceholder: '搜索配置名称',
       configName: '配置名称',
@@ -880,6 +880,7 @@ export default {
       feishuBot: '飞书机器人',
       wechatBot: '企微机器人',
       dingtalkBot: '钉钉机器人',
+      slackBot: 'Slack 机器人',
       // 表单提示
       feishuBotNamePlaceholder: '请输入飞书机器人名称',
       feishuUrlHint: '飞书机器人Webhook URL格式：https://open.feishu.cn/open-apis/bot/v2/hook/...',
@@ -887,14 +888,19 @@ export default {
       wechatUrlHint: '企业微信机器人Webhook URL格式：https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...',
       dingtalkBotNamePlaceholder: '请输入钉钉机器人名称',
       dingtalkUrlHint: '钉钉机器人Webhook URL格式：https://oapi.dingtalk.com/robot/send?access_token=...',
+      slackBotNamePlaceholder: '请输入 Slack 机器人名称',
+      slackWebhookPlaceholder: '请输入 Slack Incoming Webhook URL',
+      slackUrlHint: 'Slack Incoming Webhook URL 格式：https://hooks.slack.com/services/...',
       // 保存按钮
       saveFeishuConfig: '保存飞书机器人配置',
       saveWechatConfig: '保存企微机器人配置',
       saveDingtalkConfig: '保存钉钉机器人配置',
+      saveSlackConfig: '保存 Slack 机器人配置',
       platforms: {
         feishu: '飞书',
         wechatWork: '企业微信',
-        dingtalk: '钉钉'
+        dingtalk: '钉钉',
+        slack: 'Slack'
       },
       rules: {
         nameRequired: '请输入配置名称',
@@ -922,6 +928,9 @@ export default {
         dingtalkUpdateSuccess: '钉钉机器人配置更新成功',
         dingtalkCreateSuccess: '钉钉机器人配置创建成功',
         dingtalkSaveFailed: '钉钉机器人配置保存失败',
+        slackUpdateSuccess: 'Slack 机器人配置更新成功',
+        slackCreateSuccess: 'Slack 机器人配置创建成功',
+        slackSaveFailed: 'Slack 机器人配置保存失败',
         noExistingConfig: '未找到现有Webhook配置，将创建新配置',
         getConfigFailed: '获取Webhook机器人配置失败',
         getAllConfigFailed: '获取所有Webhook机器人配置失败'

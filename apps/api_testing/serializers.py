@@ -370,7 +370,7 @@ class ScheduledTaskSerializer(serializers.ModelSerializer):
             if notification_type in ['webhook', 'both']:
                 # 如果需要Webhook通知，优先选择Webhook配置
                 notification_config = UnifiedNotificationConfig.objects.filter(
-                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk'],
+                    config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk', 'webhook_slack'],
                     is_active=True
                 ).first()
                 if not notification_config:
@@ -432,7 +432,7 @@ class ScheduledTaskSerializer(serializers.ModelSerializer):
                 if notification_type in ['webhook', 'both']:
                     # 如果需要Webhook通知，优先选择Webhook配置
                     notification_config = UnifiedNotificationConfig.objects.filter(
-                        config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk'],
+                        config_type__in=['webhook_wechat', 'webhook_feishu', 'webhook_dingtalk', 'webhook_slack'],
                         is_active=True
                     ).first()
                     if not notification_config:
@@ -557,7 +557,8 @@ class NotificationLogSerializer(serializers.ModelSerializer):
             type_map = {
                 'wechat': '企微机器人',
                 'feishu': '飞书机器人',
-                'dingtalk': '钉钉机器人'
+                'dingtalk': '钉钉机器人',
+                'slack': 'Slack 机器人'
             }
             bot_display = type_map.get(bot_type, 'Webhook机器人')
             if bot_name:
@@ -725,7 +726,8 @@ class NotificationLogDetailSerializer(serializers.ModelSerializer):
             type_map = {
                 'wechat': '企微机器人',
                 'feishu': '飞书机器人',
-                'dingtalk': '钉钉机器人'
+                'dingtalk': '钉钉机器人',
+                'slack': 'Slack 机器人'
             }
             bot_display = type_map.get(bot_type, 'Webhook机器人')
             targets.append({
@@ -795,7 +797,7 @@ class TaskNotificationSettingDetailSerializer(serializers.ModelSerializer):
 
         # 合并自定义机器人和配置机器人
         all_bots = []
-        bot_types = ['feishu', 'wechat', 'dingtalk']
+        bot_types = ['feishu', 'wechat', 'dingtalk', 'slack']
 
         for bot_type in bot_types:
             # 检查自定义机器人
