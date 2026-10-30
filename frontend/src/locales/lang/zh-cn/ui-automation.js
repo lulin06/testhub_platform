@@ -237,7 +237,7 @@ export default {
     locatorExpression: '定位表达式',
     locatorExpressionPlaceholder: '请输入定位表达式',
     locatorOptions: '定位选项',
-    locatorOptionsPlaceholder: '请输入 JSON 对象，例如 {"name":"登录","exact":true}',
+    locatorOptionsPlaceholder: '请输入 JSON 对象，例如包含 name、exact 字段',
     locatorOptionsInvalid: '定位选项必须是有效的 JSON 对象',
     descriptionPlaceholder: '请输入元素描述',
     debugInfo: '调试',

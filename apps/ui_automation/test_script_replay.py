@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -152,6 +153,33 @@ class StorageStateApiTests(TestCase):
         download = self.client.get(f'/api/ui-automation/storage-states/{state.id}/download/')
         self.assertEqual(download.status_code, 200)
         self.assertEqual(b''.join(download.streaming_content), content)
+
+    def test_create_storage_state_from_json_content(self):
+        content = {'cookies': [{'name': 'session', 'value': 'saved'}], 'origins': []}
+        response = self.client.post(
+            '/api/ui-automation/storage-states/',
+            {
+                'project': self.project.id,
+                'name': '手工编辑登录态',
+                'source_url': '',
+                'content': content,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        state = StorageState.objects.get(pk=response.data['id'])
+        self.assertEqual(state.file_size, len(json.dumps(content, ensure_ascii=False, indent=2).encode('utf-8')))
+        with state.file.open('rb') as stored_file:
+            self.assertEqual(json.loads(stored_file.read()), content)
+
+    def test_rejects_json_file_placeholder_without_content(self):
+        response = self.client.post(
+            '/api/ui-automation/storage-states/',
+            {'project': self.project.id, 'name': '空文件对象', 'file': {}},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertNotIn('id', response.data)
 
     def test_content_update_replaces_existing_file(self):
         initial_content = b'{"cookies": [], "origins": []}'

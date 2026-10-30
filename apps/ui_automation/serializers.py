@@ -188,13 +188,15 @@ class UiProjectUpdateSerializer(serializers.ModelSerializer):
 class StorageStateSerializer(serializers.ModelSerializer):
     """校验并序列化项目级 storage_state 文件。"""
     project_id = serializers.IntegerField(write_only=True, required=False)
+    content = serializers.JSONField(write_only=True, required=False)
     download_url = serializers.SerializerMethodField()
 
     class Meta:
         model = StorageState
-        fields = ('id', 'project', 'project_id', 'name', 'source_url', 'browser', 'file', 'file_size',
+        fields = ('id', 'project', 'project_id', 'name', 'source_url', 'browser', 'file', 'content', 'file_size',
                   'download_url', 'created_by', 'created_at', 'updated_at')
         read_only_fields = ('project', 'file_size', 'download_url', 'created_by', 'created_at', 'updated_at')
+        extra_kwargs = {'file': {'required': False}}
 
     def get_download_url(self, obj):
         request = self.context.get('request')
@@ -211,6 +213,15 @@ class StorageStateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         uploaded = attrs.get('file')
+        content = attrs.get('content')
+        if content is not None and (
+            not isinstance(content, dict)
+            or not isinstance(content.get('cookies', []), list)
+            or not isinstance(content.get('origins', []), list)
+        ):
+            raise serializers.ValidationError({'content': '登录态 JSON 必须包含 cookies 和 origins 数组'})
+        if not self.instance and not uploaded and content is None:
+            raise serializers.ValidationError({'file': '请上传登录态文件或提供 content 内容'})
         if uploaded:
             if uploaded.size > 2 * 1024 * 1024:
                 raise serializers.ValidationError({'file': '登录态文件不能超过2MB'})
@@ -223,6 +234,14 @@ class StorageStateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'file': '登录态 JSON 必须包含 cookies 和 origins 数组'})
             attrs['file_size'] = uploaded.size
         return attrs
+
+    def create(self, validated_data):
+        content = validated_data.pop('content', None)
+        if content is None:
+            return super().create(validated_data)
+        instance = StorageState(**validated_data)
+        instance.write_content(json.dumps(content, ensure_ascii=False, indent=2).encode('utf-8'))
+        return instance
 
 
 class LocatorStrategySerializer(serializers.ModelSerializer):

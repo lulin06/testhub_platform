@@ -237,7 +237,7 @@ export default {
     locatorExpression: 'Locator Expression',
     locatorExpressionPlaceholder: 'Please enter locator expression',
     locatorOptions: 'Locator Options',
-    locatorOptionsPlaceholder: 'Enter a JSON object, e.g. {"name":"Login","exact":true}',
+    locatorOptionsPlaceholder: 'Enter a JSON object, e.g. with name and exact fields',
     locatorOptionsInvalid: 'Locator options must be a valid JSON object',
     descriptionPlaceholder: 'Please enter element description',
     debugInfo: 'Debug',

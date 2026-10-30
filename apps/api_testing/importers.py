@@ -153,10 +153,16 @@ def _postman_url(url):
 
 
 def _postman_query(url_data, url):
+    params = {}
     if isinstance(url_data, dict) and url_data.get('query'):
-        return {p.get('key'): p.get('value', '') for p in url_data['query']
-                if isinstance(p, dict) and p.get('key') and not p.get('disabled')}
-    return dict(parse_qsl(urlsplit(url).query, keep_blank_values=True))
+        params.update({p.get('key'): p.get('value', '') for p in url_data['query']
+                       if isinstance(p, dict) and p.get('key') and not p.get('disabled')})
+    else:
+        params.update(dict(parse_qsl(urlsplit(url).query, keep_blank_values=True)))
+    if isinstance(url_data, dict) and isinstance(url_data.get('variable'), list):
+        params.update({p.get('key'): p.get('value', '') for p in url_data['variable']
+                       if isinstance(p, dict) and p.get('key') and not p.get('disabled')})
+    return params
 
 
 def _postman(document):

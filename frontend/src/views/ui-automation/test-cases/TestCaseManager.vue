@@ -320,7 +320,7 @@
     >
       <div class="storage-state-toolbar">
         <el-button :icon="Plus" @click="openStorageStateEditor()">新建</el-button>
-        <el-upload :show-file-list="false" accept=".json,application/json" :before-upload="uploadStorageState">
+        <el-upload :show-file-list="false" accept=".json,application/json" :http-request="uploadStorageState">
           <el-button type="primary" :icon="Upload" :disabled="!projectId">上传</el-button>
         </el-upload>
       </div>
@@ -477,7 +477,7 @@ import {
   copyTestCase as copyTestCaseApi,
   getLocatorStrategies,
   getElementGroupTree,
-  getStorageStates, createStorageState, updateStorageState, deleteStorageState, downloadStorageState, updateStorageStateContent
+  getStorageStates, createStorageState, createStorageStateFromContent, updateStorageState, deleteStorageState, downloadStorageState, updateStorageStateContent
 } from '@/api/ui_automation'
 import { getVariableFunctions } from '@/api/data-factory'
 import { getPreferredProjectId, useRememberedProject } from '@/utils/projectSelection'
@@ -742,13 +742,25 @@ const formatStorageStateTime = timestamp => {
   const pad = value => String(value).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
-// 上传接口接收原始 JSON 文件，名称默认取文件名。
-const uploadStorageState = async file => {
+// 自定义上传请求直接使用 Element Plus 提供的原始 File，确保请求包含文件字节。
+const uploadStorageState = async ({ file, onSuccess, onError }) => {
+  if (!(file instanceof File)) {
+    const error = new Error('请选择有效的 JSON 文件')
+    onError(error)
+    ElMessage.error(error.message)
+    return
+  }
   const form = new FormData(); form.append('file', file); form.append('project', projectId.value)
   form.append('name', file.name.replace(/\.json$/i, '')); form.append('browser', 'chromium')
-  try { await createStorageState(form); await loadStorageStates(); ElMessage.success('登录态已添加') }
-  catch (error) { ElMessage.error(error.response?.data?.file?.[0] || error.response?.data?.error || '上传失败') }
-  return false
+  try {
+    const response = await createStorageState(form)
+    await loadStorageStates()
+    ElMessage.success('登录态已添加')
+    onSuccess(response.data)
+  } catch (error) {
+    onError(error)
+    ElMessage.error(error.response?.data?.file?.[0] || error.response?.data?.error || '上传失败')
+  }
 }
 // 打开新增或编辑表单；编辑已有资源时先读取其当前 JSON 内容。
 const openStorageStateEditor = async state => {
@@ -767,9 +779,12 @@ const saveStorageStateEditor = async () => {
       await updateStorageState(editingStorageState.value.id, { name: storageStateDraft.name, source_url: storageStateDraft.source_url })
       await updateStorageStateContent(editingStorageState.value.id, content)
     } else {
-      const file = new File([JSON.stringify(content, null, 2)], `${storageStateDraft.name}.json`, { type: 'application/json' })
-      const form = new FormData(); form.append('project', projectId.value); form.append('name', storageStateDraft.name); form.append('source_url', storageStateDraft.source_url); form.append('file', file)
-      await createStorageState(form)
+      await createStorageStateFromContent({
+        project: projectId.value,
+        name: storageStateDraft.name,
+        source_url: storageStateDraft.source_url,
+        content
+      })
     }
     showStorageStateEditor.value = false; await loadStorageStates()
   } catch (error) { ElMessage.error(error.response?.data?.content?.[0] || error.message || '保存失败') }

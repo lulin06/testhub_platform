@@ -28,6 +28,12 @@ export const createStorageState = data => request({
   data,
   headers: { 'Content-Type': 'multipart/form-data' }
 })
+// 手工编辑直接发送 JSON 内容，避免将浏览器 File 对象序列化成空对象。
+export const createStorageStateFromContent = data => request({
+  url: '/ui-automation/storage-states/',
+  method: 'post',
+  data
+})
 export const updateStorageState = (id, data) => request({ url: `/ui-automation/storage-states/${id}/`, method: 'patch', data })
 export const deleteStorageState = id => request({ url: `/ui-automation/storage-states/${id}/`, method: 'delete' })
 export const downloadStorageState = id => request({ url: `/ui-automation/storage-states/${id}/download/`, method: 'get', responseType: 'blob' })

@@ -19,9 +19,10 @@ import time
 import os
 import json
 import logging
+import re
 import uuid
 import subprocess
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlsplit
 from datetime import datetime, timedelta
 
 from .models import (
@@ -328,18 +329,75 @@ class ApiCollectionViewSet(viewsets.ModelViewSet):
         def postman_request(api_request):
             params = key_value_rows(api_request.params)
             headers = key_value_rows(api_request.headers)
-            url = api_request.url or ''
-            if params:
-                query = '&'.join(
-                    f"{row['key']}={row['value']}" for row in params if not row.get('disabled')
-                )
-                separator = '&' if '?' in url else '?'
-                url = f'{url}{separator}{query}' if query else url
+            raw_url = (api_request.url or '').strip()
+            parsed_url = urlsplit(raw_url)
+            path = parsed_url.path
+            host = []
+            protocol = parsed_url.scheme or None
+            port = None
+            if parsed_url.netloc:
+                hostname = parsed_url.hostname or parsed_url.netloc
+                host = hostname.split('.')
+                port = parsed_url.port
+            else:
+                # Postman URL 结构中将环境变量主机和接口路径分别保存。
+                variable_host = re.match(r'^(\{\{[^{}]+\}\})(.*)$', path)
+                if variable_host:
+                    host = [variable_host.group(1)]
+                    path = variable_host.group(2)
+
+            path_segments = [segment for segment in path.strip('/').split('/') if segment]
+            path_variable_names = re.findall(r'(?<!\{)\{([^{}]+)\}(?!\})', path)
+            path_variable_names = [name.strip() for name in path_variable_names if name.strip()]
+            path_variable_keys = {name.casefold() for name in path_variable_names}
+            path_params = {
+                row['key'].casefold(): row
+                for row in params
+                if row.get('key') and row['key'].casefold() in path_variable_keys
+            }
+            variable_rows = [
+                {
+                    'key': name,
+                    'value': path_params.get(name.casefold(), {}).get('value', ''),
+                    'description': path_params.get(name.casefold(), {}).get('description', ''),
+                    'disabled': path_params.get(name.casefold(), {}).get('disabled', False),
+                }
+                for name in path_variable_names
+            ]
+            query_rows = [
+                {'key': key, 'value': value, 'disabled': False}
+                for key, value in parse_qsl(parsed_url.query, keep_blank_values=True)
+            ]
+            existing_query_keys = {row['key'] for row in query_rows}
+            query_rows.extend(
+                {
+                    'key': row['key'],
+                    'value': row['value'],
+                    'description': row.get('description', ''),
+                    'disabled': row.get('disabled', False),
+                }
+                for row in params
+                if row.get('key')
+                and row['key'].casefold() not in path_variable_keys
+                and row['key'] not in existing_query_keys
+            )
+            postman_url = {
+                'raw': raw_url,
+                'host': host,
+                'path': path_segments,
+                'query': query_rows,
+            }
+            if variable_rows:
+                postman_url['variable'] = variable_rows
+            if protocol:
+                postman_url['protocol'] = protocol
+            if port:
+                postman_url['port'] = str(port)
 
             request_data = {
                 'method': api_request.method,
                 'header': headers,
-                'url': {'raw': url},
+                'url': postman_url,
             }
             body = api_request.body or {}
             body_type = body.get('type') if isinstance(body, dict) else None
